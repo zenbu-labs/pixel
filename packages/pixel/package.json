@@ -5,7 +5,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zenbu-labs/terminal-electron.git",
+    "url": "git+https://github.com/zenbu-labs/pixel.git",
     "directory": "packages/pixel"
   },
   "main": "dist/index.js",

@@ -27,7 +27,7 @@ if (!platform) {
 
 const mirror =
   process.env.PIXEL_ELECTRON_MIRROR ??
-  `https://github.com/zenbu-labs/terminal-electron/releases/download/electron-v${version}`;
+  `https://github.com/zenbu-labs/pixel/releases/download/electron-v${version}`;
 const zipName = `electron-v${version}-${platform}.zip`;
 
 async function fetchBytes(url) {
