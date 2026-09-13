@@ -1,13 +1,10 @@
 #!/usr/bin/env node
-// The part of the app the shell runs. It never draws anything: it finds or
-// starts the daemon, asks it to open a page on this terminal, and then stays
-// in the foreground until the daemon says the page is gone.
 import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { checkTerminal, detect, unsupportedGraphicsMessage } from "terminal-electron/terminal";
+import { checkTerminal, detect, unsupportedGraphicsMessage } from "@zenbu-labs/pixel/terminal";
 
 import { SOCKET, lines } from "./protocol";
 import type { Reply, Request } from "./protocol";
@@ -21,10 +18,10 @@ function ownTty(): string {
 }
 
 function libraryDir(): string {
-  return path.dirname(require.resolve("terminal-electron/package.json"));
+  return path.dirname(require.resolve("@zenbu-labs/pixel/package.json"));
 }
 
-// terminal-electron's own launcher insists on a terminal and hands it to the
+// pixel's own launcher insists on a terminal and hands it to the
 // app it starts. A daemon has no terminal of its own, so it has to start
 // electron the same way the launcher does, by hand.
 function spawnDaemon(): void {
@@ -37,7 +34,7 @@ function spawnDaemon(): void {
   const bootstrap = path.join(library, "dist", "bootstrap.js");
   const entry = path.join(__dirname, "daemon.js");
   const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.startsWith("TERMINAL_ELECTRON_") && key !== "ELECTRON_RUN_AS_NODE"),
+    Object.entries(process.env).filter(([key]) => !key.startsWith("PIXEL_") && key !== "ELECTRON_RUN_AS_NODE"),
   );
   fs.mkdirSync(path.dirname(SOCKET), { recursive: true });
   const log = fs.openSync(path.join(path.dirname(SOCKET), "daemon.log"), "a");
@@ -78,7 +75,7 @@ async function main(): Promise<number> {
     return 0;
   }
 
-  const tty = process.env.TERMINAL_ELECTRON_TTY ?? ownTty();
+  const tty = process.env.PIXEL_TTY ?? ownTty();
   const check = await checkTerminal(detect());
   if (check.graphics === "unsupported") {
     process.stderr.write(unsupportedGraphicsMessage(true));

@@ -46,8 +46,8 @@ jobs:
           elif [ "${{ github.event_name }}" = workflow_dispatch ]; then
             TAG="$(scripts/next-version.sh "${{ inputs.bump }}")"
             VERSION="${TAG#v}"
-            git -c user.name="terminal-electron release" -c user.email="release@zenbu.dev" \
-              tag -a "$TAG" -m "terminal-electron $TAG"
+            git -c user.name="pixel release" -c user.email="release@zenbu.dev" \
+              tag -a "$TAG" -m "pixel $TAG"
             git push origin "$TAG"
             echo "ref=refs/tags/$TAG" >> "$GITHUB_OUTPUT"
             echo "release=true" >> "$GITHUB_OUTPUT"
@@ -70,8 +70,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - run: TERMINAL_ELECTRON_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
-      - run: pnpm --filter terminal-electron build
+      - run: PIXEL_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
+      - run: pnpm --filter @zenbu-labs/pixel build
       - run: pnpm -r typecheck
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo check --workspace --all-targets
@@ -108,7 +108,7 @@ jobs:
         with:
           workspaces: engine
       - run: node scripts/build-native.mjs --release
-        working-directory: packages/terminal-electron
+        working-directory: packages/pixel
       - if: matrix.container
         run: objdump -T packages/native/${{ matrix.platform }}/pixel.node | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1 | grep -qx GLIBC_2.28
       - uses: actions/upload-artifact@v4
@@ -148,17 +148,17 @@ jobs:
             cp "$dir"/* "packages/native/$platform/"
           done
           chmod +x packages/native/darwin-*/native-scroll-helper
-      - run: TERMINAL_ELECTRON_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
-      - run: pnpm --filter terminal-electron build
+      - run: PIXEL_SKIP_DOWNLOAD=1 pnpm install --frozen-lockfile
+      - run: pnpm --filter @zenbu-labs/pixel build
       - name: Stamp versions from the tag
         run: |
           VERSION="${{ needs.prepare.outputs.version }}"
-          for pkg in packages/native/* packages/terminal-electron; do
+          for pkg in packages/native/* packages/pixel; do
             (cd "$pkg" && npm version "$VERSION" --no-git-tag-version --allow-same-version)
           done
           node -e '
             const fs = require("fs");
-            const file = "packages/terminal-electron/package.json";
+            const file = "packages/pixel/package.json";
             const pkg = JSON.parse(fs.readFileSync(file, "utf8"));
             for (const name of Object.keys(pkg.optionalDependencies)) pkg.optionalDependencies[name] = process.argv[1];
             fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n");
@@ -168,10 +168,10 @@ jobs:
           for pkg in packages/native/*; do
             (cd "$pkg" && npm publish --access public --provenance)
           done
-          (cd packages/terminal-electron && npm publish --access public --provenance)
+          (cd packages/pixel && npm publish --access public --provenance)
       - name: GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "v${{ needs.prepare.outputs.version }}" -R "$GITHUB_REPOSITORY" \
-            --title "terminal-electron v${{ needs.prepare.outputs.version }}" --generate-notes
+            --title "pixel v${{ needs.prepare.outputs.version }}" --generate-notes

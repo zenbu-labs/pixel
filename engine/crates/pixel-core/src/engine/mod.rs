@@ -371,7 +371,7 @@ impl Engine {
         let window = window_from(&ws, cell);
         let base_px = px_for_cell_height(&config.fonts[config.cell_metrics_font], cell.1 as f32);
         // look into this
-        // Under a terminal-electron owner the owner pairs trackpad deltas and
+        // Under a pixel owner the owner pairs trackpad deltas and
         // forwards them; a foreign host only sends wheel ticks, so pair them here.
         let native = if term.is_hosted() && !term.is_embedded() {
             None

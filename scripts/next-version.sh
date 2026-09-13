@@ -11,7 +11,7 @@ esac
 
 LATEST="$(git tag --list 'v*' --sort=-v:refname | head -1)"
 if [ -z "$LATEST" ]; then
-  PKG="$(cd "$(dirname "$0")/.." && pwd)/packages/terminal-electron/package.json"
+  PKG="$(cd "$(dirname "$0")/.." && pwd)/packages/pixel/package.json"
   LATEST="v$(node -p "require(process.argv[1]).version" "$PKG")"
 fi
 

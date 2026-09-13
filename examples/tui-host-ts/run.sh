@@ -6,11 +6,11 @@ HERE="$ROOT/examples/tui-host-ts"
 
 cd "$ROOT"
 if [ "${NATIVE_DEBUG:-}" = "1" ]; then
-  node packages/terminal-electron/scripts/build-native.mjs
+  node packages/pixel/scripts/build-native.mjs
 else
-  node packages/terminal-electron/scripts/build-native.mjs --release
+  node packages/pixel/scripts/build-native.mjs --release
 fi
-pnpm --filter terminal-electron build
+pnpm --filter @zenbu-labs/pixel build
 pnpm --filter hello build
 
 cd "$HERE"

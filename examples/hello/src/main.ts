@@ -1,4 +1,4 @@
-import { createRoot } from "terminal-electron";
+import { createRoot } from "@zenbu-labs/pixel";
 
 const url = process.argv[2] ?? "https://github.com/zenbu-labs";
 const partition = process.argv[3] ?? process.env.HELLO_PARTITION;

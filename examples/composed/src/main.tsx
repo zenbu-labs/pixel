@@ -11,8 +11,8 @@ import {
   createRoot,
   makeTheme,
   useTerminalColors,
-} from "terminal-electron";
-import type { Theme, WebViewHandle, WebViewState } from "terminal-electron";
+} from "@zenbu-labs/pixel";
+import type { Theme, WebViewHandle, WebViewState } from "@zenbu-labs/pixel";
 
 const root = createRoot({
   onKey(event) {
@@ -25,10 +25,10 @@ const root = createRoot({
 
 const PAGE_URL = `file://${path.join(__dirname, "..", "page.html")}`;
 
-// Launches the hello example the way any terminal-electron app would be
+// Launches the hello example the way any pixel app would be
 // launched from a shell in this pane; the library makes it a guest tab.
 function openExample(name: string) {
-  const bin = path.join(path.dirname(require.resolve("terminal-electron/package.json")), "dist", "bin.js");
+  const bin = path.join(path.dirname(require.resolve("@zenbu-labs/pixel/package.json")), "dist", "bin.js");
   const child = spawn(process.execPath, [bin, path.join(__dirname, "..", "..", name)], {
     stdio: "inherit",
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

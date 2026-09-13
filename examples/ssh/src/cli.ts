@@ -1,12 +1,8 @@
 #!/usr/bin/env node
-// ssh-example [--ssh <target>] [--bundle <dir>] [url]
-//
-// Connects before the app takes over the terminal, so ssh can ask for a
-// password or a host key, then starts the app pointed at the tunnel.
 import { spawn } from "node:child_process";
 import path from "node:path";
 
-import { connectSsh } from "terminal-electron/ssh";
+import { connectSsh } from "@zenbu-labs/pixel/ssh";
 
 function option(name: string): string | undefined {
   const at = process.argv.indexOf(name);
@@ -26,7 +22,7 @@ async function main(): Promise<number> {
   }
   if (url) appArgs.push(url);
 
-  const launcher = path.join(path.dirname(require.resolve("terminal-electron/package.json")), "dist", "bin.js");
+  const launcher = path.join(path.dirname(require.resolve("@zenbu-labs/pixel/package.json")), "dist", "bin.js");
   const child = spawn(process.execPath, [launcher, path.join(__dirname, "main.js"), "--", ...appArgs], { stdio: "inherit" });
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.on(signal, () => child.kill(signal));
   return new Promise<number>((resolve) => child.on("exit", (code, signal) => resolve(code ?? (signal ? 128 : 0))));

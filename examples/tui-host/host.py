@@ -15,9 +15,9 @@ import tty
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
-BIN = os.path.join(ROOT, "packages", "terminal-electron", "dist", "bin.js")
+BIN = os.path.join(ROOT, "packages", "pixel", "dist", "bin.js")
 APP = os.path.join(ROOT, "examples", "hello")
-# Any terminal-electron app works, e.g.  host.py terminal-browser open https://example.com
+# Any pixel app works, e.g.  host.py terminal-browser open https://example.com
 COMMAND = sys.argv[1:] or ["node", BIN, APP]
 IMAGE_ID = 0x7E42
 SIDEBAR = 28
@@ -317,8 +317,8 @@ class Host:
         server = socket.socket(socket.AF_UNIX)
         server.bind(self.sock_path)
         server.listen(1)
-        env = dict(os.environ, TERMINAL_ELECTRON_EMBED=self.sock_path, TERMINAL_ELECTRON_TTY=os.ttyname(self.fd))
-        env.pop("TERMINAL_ELECTRON_PANE", None)
+        env = dict(os.environ, PIXEL_EMBED=self.sock_path, PIXEL_TTY=os.ttyname(self.fd))
+        env.pop("PIXEL_PANE", None)
         log = open(os.path.join(HERE, "app.stderr.log"), "ab")
         self.child = subprocess.Popen(COMMAND, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log)
         resized = [False]

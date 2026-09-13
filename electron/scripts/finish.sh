@@ -26,13 +26,20 @@ FUSES="$TOOLS/node_modules/.bin/electron-fuses"
 case "$PLATFORM" in
   darwin-*)
     APP="$STAGE/Electron.app"
-    # a background app: no Dock icon while a terminal pane is drawing
     /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" "$APP/Contents/Info.plist" 2>/dev/null \
       || /usr/libexec/PlistBuddy -c "Set :LSUIElement true" "$APP/Contents/Info.plist"
+    mv "$APP/Contents/MacOS/Electron" "$APP/Contents/MacOS/pixel"
+    /usr/libexec/PlistBuddy \
+      -c "Set :CFBundleExecutable pixel" \
+      -c "Set :CFBundleName pixel" \
+      -c "Set :CFBundleDisplayName pixel" \
+      -c "Set :CFBundleIdentifier dev.zenbu.pixel" \
+      "$APP/Contents/Info.plist"
     FUSE_TARGET="$APP"
     ;;
   linux-*)
-    FUSE_TARGET="$STAGE/electron"
+    mv "$STAGE/electron" "$STAGE/pixel"
+    FUSE_TARGET="$STAGE/pixel"
     ;;
   *) echo "finish.sh: unknown platform $PLATFORM" >&2; exit 1 ;;
 esac

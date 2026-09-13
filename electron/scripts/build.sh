@@ -1,17 +1,5 @@
 #!/usr/bin/env bash
-#
-# Produces in <output dir>:
-#   electron-v<version>-<platform>.zip   (official asset naming)
-#   electron.d.ts                        (types generated from the patched docs)
-#   SHASUMS256.txt                       (this platform's assets only)
-#
-# Environment:
-#   ELECTRON_BUILD_DIR  work dir for depot_tools + checkout (default ~/.terminal-electron-build)
-#   GN_BUILD_TYPE       release (default) or testing
-#   SKIP_BUILD_DEPS     1 to skip chromium's install-build-deps.sh on linux
-#   ELECTRON_UNSIGNED   1 to sign macOS builds ad-hoc instead of with the Developer ID
-#                       (otherwise the MACOS_SIGN_* and APPLE_API_* variables of
-#                       scripts/macos-sign.sh are required)
+
 set -euo pipefail
 
 VERSION="${1:?usage: build.sh <electron version> <output dir> [platform]}"
@@ -35,7 +23,7 @@ if [ "$PLATFORM" != "$HOST" ]; then
   esac
 fi
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${ELECTRON_BUILD_DIR:-$HOME/.terminal-electron-build}"
+WORK="${ELECTRON_BUILD_DIR:-$HOME/.pixel-build}"
 GN_BUILD_TYPE="${GN_BUILD_TYPE:-release}"
 mkdir -p "$WORK" "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"

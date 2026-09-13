@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PACKAGE = path.resolve(HERE, "..");
 const ROOT = path.resolve(PACKAGE, "..", "..");
-const BIN = path.join(ROOT, "packages", "terminal-electron", "dist", "bin.js");
+const BIN = path.join(ROOT, "packages", "pixel", "dist", "bin.js");
 const APP = path.join(ROOT, "examples", "hello");
 const COMMAND = process.argv.slice(2).length ? process.argv.slice(2) : ["node", BIN, APP];
 const IMAGE_ID = 0x7e42;
@@ -446,10 +446,10 @@ class Host {
 
     const env: NodeJS.ProcessEnv = {
       ...process.env,
-      TERMINAL_ELECTRON_EMBED: this.sockPath,
-      TERMINAL_ELECTRON_TTY: ttyName(),
+      PIXEL_EMBED: this.sockPath,
+      PIXEL_TTY: ttyName(),
     };
-    delete env.TERMINAL_ELECTRON_PANE;
+    delete env.PIXEL_PANE;
     const log = fs.openSync(path.join(PACKAGE, "app.stderr.log"), "a");
     this.child = spawn(COMMAND[0], COMMAND.slice(1), { env, stdio: ["ignore", "ignore", log] });
     this.child.on("exit", () => this.stop());

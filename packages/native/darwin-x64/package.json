@@ -1,7 +1,7 @@
 {
-  "name": "terminal-electron-native-darwin-x64",
+  "name": "@zenbu-labs/pixel-native-darwin-x64",
   "version": "0.0.2",
-  "description": "[placeholder copy: prebuilt engine binary for terminal-electron on darwin-x64]",
+  "description": "[placeholder copy: prebuilt engine binary for pixel on darwin-x64]",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -1,9 +1,9 @@
 {
-  "name": "terminal-electron-monorepo",
+  "name": "pixel-monorepo",
   "private": true,
   "scripts": {
     "build": "pnpm -r build",
-    "build:native": "pnpm --filter terminal-electron build:native",
+    "build:native": "pnpm --filter @zenbu-labs/pixel build:native",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },

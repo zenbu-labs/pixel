@@ -2,9 +2,9 @@ import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 
-import { app } from "terminal-electron/electron";
-import { createRoot, WebView } from "terminal-electron";
-import type { Root } from "terminal-electron";
+import { app } from "@zenbu-labs/pixel/electron";
+import { createRoot, WebView } from "@zenbu-labs/pixel";
+import type { Root } from "@zenbu-labs/pixel";
 
 import { SOCKET, lines } from "./protocol";
 import type { Reply, Request } from "./protocol";

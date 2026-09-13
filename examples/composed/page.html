@@ -28,11 +28,11 @@
     <a href="https://github.com/zenbu-labs" target="_blank">target=_blank link</a>
   </p>
   <p><input placeholder="[placeholder copy: type here to test keys and the paste menu]"></p>
-  <p><button onclick="terminalElectron.quit()">terminalElectron.quit()</button></p>
+  <p><button onclick="pixel.quit()">pixel.quit()</button></p>
 </main>
 <script>
   const rgb = (c) => c ? `rgb(${c[0]}, ${c[1]}, ${c[2]})` : "transparent";
-  terminalElectron.onTheme((theme) => {
+  pixel.onTheme((theme) => {
     document.documentElement.style.setProperty("--bg", rgb(theme.background));
     document.documentElement.style.setProperty("--fg", rgb(theme.foreground));
     document.documentElement.style.setProperty("--accent", rgb(theme.ansi[4] ?? theme.foreground));

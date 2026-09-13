@@ -1,8 +1,8 @@
 import { contextBridge } from "electron";
-import type { TerminalTheme } from "terminal-electron/preload";
+import type { TerminalTheme } from "@zenbu-labs/pixel/preload";
 
-contextBridge.exposeInMainWorld("terminalElectron", {
-  theme: () => terminalElectron.theme(),
-  onTheme: (subscriber: (theme: TerminalTheme) => void) => terminalElectron.onTheme(subscriber),
-  quit: () => terminalElectron.quit(),
+contextBridge.exposeInMainWorld("pixel", {
+  theme: () => pixel.theme(),
+  onTheme: (subscriber: (theme: TerminalTheme) => void) => pixel.onTheme(subscriber),
+  quit: () => pixel.quit(),
 });

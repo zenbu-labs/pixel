@@ -25,4 +25,4 @@ packages/native/*/native-scroll-helper
 .claude/worktrees/
 
 # the patched electron build and its types, fetched by postinstall
-/packages/terminal-electron/electron/
+/packages/pixel/electron/

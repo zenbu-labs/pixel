@@ -126,7 +126,7 @@ jobs:
           ls *.zip electron.d.ts >/dev/null
           # every platform leg generates the same electron.d.ts and lists it
           cat sha-*.txt | sort -u > new.txt
-          notes="Patched Electron v$version for terminal-electron.
+          notes="Patched Electron v$version for pixel.
 
           Patches (source of truth: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/tree/main/electron/patches):
           - macOS: offscreen-rendering compositors ride a real display link, so page frame rates follow \`webContents.setFrameRate\` instead of being clamped to 60fps on input.

@@ -1,7 +1,7 @@
 import path from "node:path";
 
-import { Box, Text, WebView, createRoot, useTerminalColors } from "terminal-electron";
-import type { Rgba } from "terminal-electron";
+import { Box, Text, WebView, createRoot, useTerminalColors } from "@zenbu-labs/pixel";
+import type { Rgba } from "@zenbu-labs/pixel";
 
 const root = createRoot({
   onKey(event) {

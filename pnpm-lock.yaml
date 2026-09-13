@@ -10,12 +10,12 @@ importers:
 
   examples/composed:
     dependencies:
+      '@zenbu-labs/pixel':
+        specifier: workspace:*
+        version: link:../../packages/pixel
       react:
         specifier: ^18.3.1
         version: 18.3.1
-      terminal-electron:
-        specifier: workspace:*
-        version: link:../../packages/terminal-electron
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -29,12 +29,12 @@ importers:
 
   examples/daemon:
     dependencies:
+      '@zenbu-labs/pixel':
+        specifier: workspace:*
+        version: link:../../packages/pixel
       react:
         specifier: ^18.3.1
         version: 18.3.1
-      terminal-electron:
-        specifier: workspace:*
-        version: link:../../packages/terminal-electron
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -48,9 +48,9 @@ importers:
 
   examples/hello:
     dependencies:
-      terminal-electron:
+      '@zenbu-labs/pixel':
         specifier: workspace:*
-        version: link:../../packages/terminal-electron
+        version: link:../../packages/pixel
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -61,12 +61,12 @@ importers:
 
   examples/ssh:
     dependencies:
+      '@zenbu-labs/pixel':
+        specifier: workspace:*
+        version: link:../../packages/pixel
       react:
         specifier: ^18.3.1
         version: 18.3.1
-      terminal-electron:
-        specifier: workspace:*
-        version: link:../../packages/terminal-electron
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -80,12 +80,12 @@ importers:
 
   examples/transparent:
     dependencies:
+      '@zenbu-labs/pixel':
+        specifier: workspace:*
+        version: link:../../packages/pixel
       react:
         specifier: ^18.3.1
         version: 18.3.1
-      terminal-electron:
-        specifier: workspace:*
-        version: link:../../packages/terminal-electron
     devDependencies:
       '@types/node':
         specifier: ^22.0.0
@@ -114,7 +114,7 @@ importers:
 
   packages/native/linux-x64: {}
 
-  packages/terminal-electron:
+  packages/pixel:
     dependencies:
       react-reconciler:
         specifier: ^0.29.2
@@ -136,16 +136,16 @@ importers:
         specifier: ^5.5.0
         version: 5.9.3
     optionalDependencies:
-      terminal-electron-native-darwin-arm64:
+      '@zenbu-labs/pixel-native-darwin-arm64':
         specifier: 0.0.2
         version: link:../native/darwin-arm64
-      terminal-electron-native-darwin-x64:
+      '@zenbu-labs/pixel-native-darwin-x64':
         specifier: 0.0.2
         version: link:../native/darwin-x64
-      terminal-electron-native-linux-arm64:
+      '@zenbu-labs/pixel-native-linux-arm64':
         specifier: 0.0.2
         version: link:../native/linux-arm64
-      terminal-electron-native-linux-x64:
+      '@zenbu-labs/pixel-native-linux-x64':
         specifier: 0.0.2
         version: link:../native/linux-x64
 

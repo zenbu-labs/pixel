@@ -1,4 +1,4 @@
-import { Box, createRoot, Text, WebView } from "terminal-electron";
+import { Box, createRoot, Text, WebView } from "@zenbu-labs/pixel";
 
 const args = process.argv.slice(2);
 const proxy = args.find((arg) => arg.startsWith("--proxy="))?.slice("--proxy=".length);

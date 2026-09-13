@@ -1,7 +1,7 @@
 {
-  "name": "terminal-electron-native-linux-arm64",
+  "name": "@zenbu-labs/pixel-native-linux-arm64",
   "version": "0.0.2",
-  "description": "[placeholder copy: prebuilt engine binary for terminal-electron on linux-arm64]",
+  "description": "[placeholder copy: prebuilt engine binary for pixel on linux-arm64]",
   "license": "MIT",
   "repository": {
     "type": "git",

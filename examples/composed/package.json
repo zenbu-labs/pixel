@@ -5,11 +5,11 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "start": "tsc -p tsconfig.json && terminal-electron . --"
+    "start": "tsc -p tsconfig.json && pixel . --"
   },
   "dependencies": {
     "react": "^18.3.1",
-    "terminal-electron": "workspace:*"
+    "@zenbu-labs/pixel": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
