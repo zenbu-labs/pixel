@@ -54,12 +54,9 @@ function electronBinary(): string {
       "[placeholder copy: the patched electron build is not installed. Run `node node_modules/@zenbu-labs/pixel/scripts/postinstall.mjs` (npm normally runs it for you on install).]",
     );
   }
-  if (process.platform !== "darwin") return path.join(dist, "pixel");
-  const app = path.join(dist, "Electron.app");
-  const plist = fs.readFileSync(path.join(app, "Contents", "Info.plist"), "utf8");
-  const executable = /<key>CFBundleExecutable<\/key>\s*<string>([^<]+)<\/string>/.exec(plist)?.[1];
-  if (!executable) fail(`[placeholder copy: ${app} has no CFBundleExecutable in its Info.plist]`);
-  return path.join(app, "Contents", "MacOS", executable);
+  return process.platform === "darwin"
+    ? path.join(dist, "Electron.app", "Contents", "MacOS", "pixel")
+    : path.join(dist, "pixel");
 }
 
 function logFile(appDir: string): string {
