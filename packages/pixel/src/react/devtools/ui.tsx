@@ -14,7 +14,7 @@ export function Button(props: {
   return (
     <Box
       style={{
-        padding: { left: rem * 0.5, right: rem * 0.5, top: rem * 0.15, bottom: rem * 0.15 },
+        padding: { left: rem * 0.7, right: rem * 0.7, top: rem * 0.4, bottom: rem * 0.4 },
         cornerRadius: rem * 0.25,
         background: active ? theme.accentDim : undefined,
         hoverBackground: active ? theme.accentDim : theme.hover,
@@ -25,7 +25,7 @@ export function Button(props: {
       <Text
         style={{
           color: danger ? theme.danger : active ? theme.accent : theme.text,
-          fontSize: rem * 0.75,
+          fontSize: rem * 0.82,
           wrap: false,
         }}
       >
@@ -46,7 +46,7 @@ export function Chip(props: {
   return (
     <Box
       style={{
-        padding: { left: rem * 0.4, right: rem * 0.4, top: rem * 0.08, bottom: rem * 0.08 },
+        padding: { left: rem * 0.6, right: rem * 0.6, top: rem * 0.38, bottom: rem * 0.38 },
         cornerRadius: rem * 0.5,
         background: active ? theme.accentDim : theme.chrome,
         hoverBackground: onClick ? theme.chromeActive : undefined,
@@ -56,7 +56,7 @@ export function Chip(props: {
       <Text
         style={{
           color: color ?? (active ? theme.accent : theme.dim),
-          fontSize: rem * 0.68,
+          fontSize: rem * 0.8,
           wrap: false,
         }}
       >
@@ -72,8 +72,8 @@ export function Toolbar(props: { rem: number; children?: React.ReactNode }) {
       style={{
         flexDirection: "row",
         alignItems: "center",
-        gap: props.rem * 0.4,
-        padding: props.rem * 0.35,
+        gap: props.rem * 0.5,
+        padding: props.rem * 0.45,
         background: theme.panel,
         border: { width: 0, color: theme.border },
         flexShrink: 0,

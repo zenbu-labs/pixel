@@ -428,10 +428,20 @@ impl Terminal {
     pub fn join_embedded(socket: &str, pane: &str, name: &str, tty_path: &str) -> io::Result<Self> {
         let crate::hosted::Joined {
             stream,
-            state,
+            mut state,
             pending,
         } = crate::hosted::join(socket, pane, name)?;
-        let tty = std::fs::File::options().write(true).open(tty_path)?;
+        let tty = std::fs::File::options().read(true).write(true).open(tty_path)?;
+      
+        if state.cell.is_none() {
+            state.cell = cell_size_of_tty(&tty).or_else(|| {
+                crate::logging::warn("embed", "the terminal reports no cell size; assuming 16x34");
+                Some(DEFAULT_CELL)
+            });
+        }
+        state.fill_pixel_size();
+       
+        rustix::fs::fcntl_setfl(&tty, rustix::fs::fcntl_getfl(&tty)? | rustix::fs::OFlags::NONBLOCK)?;
         let mut terminal = Self::blank(TtyHandle::Embedded { stream, tty }, None, Wrapper::None, None);
         terminal.transport = match state.transport.as_deref() {
             Some("file") => FrameTransport::File,
@@ -859,14 +869,81 @@ impl Terminal {
                 Wrapper::None,
             ));
         }
-        self.io.out().write_all(&frame)?;
-        self.io.out().flush()?;
+        self.write_frame_gated(&frame)?;
         self.placed_grid = Some((cols, rows));
         if self.placeholders != Some((cols, rows)) {
             self.placeholders = Some((cols, rows));
-            self.host_send(crate::hosted::placed(self.image_id, cols, rows))?;
+            self.host_send(crate::hosted::placed(self.image_id, cols, rows, self.cell))?;
         }
         Ok(frame.len())
+    }
+
+   
+    fn wait_for_quiet_tty(&self) -> Option<()> {
+        let config = gate_config();
+        let mut unread = unread_output_of(&self.io)?;
+        let start = Instant::now();
+        let mut quiet_since: Option<Instant> = None;
+        loop {
+            let now = Instant::now();
+            if unread == 0 {
+                match quiet_since {
+                    None => quiet_since = Some(now),
+                    Some(since) if now.duration_since(since) >= config.quiet => return Some(()),
+                    Some(_) => {}
+                }
+            } else {
+                quiet_since = None;
+            }
+            if now.duration_since(start) >= config.timeout {
+                return Some(());
+            }
+            std::thread::sleep(EMBED_GATE_TICK);
+            unread = unread_output_of(&self.io)?;
+        }
+    }
+
+    fn write_frame_gated(&mut self, frame: &[u8]) -> io::Result<()> {
+        if self.wait_for_quiet_tty().is_none() {
+            self.io.out().write_all(frame)?;
+            return self.io.out().flush();
+        }
+        let start = Instant::now();
+        loop {
+            if unread_output_of(&self.io).is_some_and(|n| n > 0) {
+            } else {
+                match self.io.out().write(frame) {
+                    Ok(n) if n == frame.len() => break,
+                    Ok(n) => {
+                        crate::logging::warn("embed", "the tty queue filled mid-write; a frame may have torn");
+                        self.write_rest_soon(&frame[n..])?;
+                        break;
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(e) => return Err(e),
+                }
+            }
+            if start.elapsed() >= gate_config().timeout {
+                crate::logging::warn("embed", "the tty never went quiet; wrote into a busy tty, a frame may have torn");
+                self.write_rest_soon(frame)?;
+                break;
+            }
+            if self.wait_for_quiet_tty().is_none() {
+                break;
+            }
+        }
+        self.io.out().flush()
+    }
+
+    fn write_rest_soon(&mut self, mut rest: &[u8]) -> io::Result<()> {
+        while !rest.is_empty() {
+            match self.io.out().write(rest) {
+                Ok(n) => rest = &rest[n..],
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_micros(50)),
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
     }
 
     fn grid_for(&self, canvas: &Canvas) -> (u32, u32) {
@@ -1438,6 +1515,56 @@ const FILE_PROBE_ID: u32 = 300;
 const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
 
 const FRAME_SLOTS: u64 = 8;
+const DEFAULT_CELL: (u32, u32) = (16, 34);
+
+
+const EMBED_GATE_TICK: Duration = Duration::from_micros(20);
+
+struct GateConfig {
+    quiet: Duration,
+    timeout: Duration,
+}
+
+fn gate_config() -> &'static GateConfig {
+    static CONFIG: std::sync::OnceLock<GateConfig> = std::sync::OnceLock::new();
+    CONFIG.get_or_init(|| {
+        let millis = |name: &str, default: u64| {
+            std::env::var(name)
+                .ok()
+                .and_then(|v| v.parse::<u64>().ok())
+                .map_or(Duration::from_millis(default), Duration::from_millis)
+        };
+        GateConfig {
+            quiet: millis("EMBED_GATE_QUIET_MS", 20),
+            timeout: millis("EMBED_GATE_TIMEOUT_MS", 400),
+        }
+    })
+}
+
+fn cell_size_of_tty(tty: &std::fs::File) -> Option<(u32, u32)> {
+    let ws = termios::tcgetwinsize(tty).ok()?;
+    WindowSize {
+        cols: u32::from(ws.ws_col),
+        rows: u32::from(ws.ws_row),
+        width_px: u32::from(ws.ws_xpixel),
+        height_px: u32::from(ws.ws_ypixel),
+    }
+    .cell_size()
+}
+
+#[allow(unsafe_code)]
+fn unread_output_of(handle: &TtyHandle) -> Option<usize> {
+    use rustix::fd::AsRawFd as _;
+    let fd = match handle {
+        TtyHandle::File(file) => file.as_raw_fd(),
+        TtyHandle::Embedded { tty, .. } => tty.as_raw_fd(),
+        _ => return None,
+    };
+    let mut count: libc::c_int = 0;
+    // SAFETY: TIOCOUTQ stores one c_int through the pointer; the fd is open and ours.
+    let rc = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut count) };
+    (rc == 0).then(|| count.max(0) as usize)
+}
 
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
