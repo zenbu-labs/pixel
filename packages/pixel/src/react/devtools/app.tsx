@@ -40,7 +40,7 @@ function Tab(props: { id: TabId; label: string; active: boolean; rem: number }) 
   return (
     <Box
       style={{
-        padding: { left: rem * 0.7, right: rem * 0.7, top: rem * 0.3, bottom: rem * 0.3 },
+        padding: { left: rem * 0.95, right: rem * 0.95, top: rem * 0.5, bottom: rem * 0.5 },
         background: active ? theme.bg : undefined,
         hoverBackground: active ? theme.bg : theme.chromeActive,
       }}
@@ -49,7 +49,7 @@ function Tab(props: { id: TabId; label: string; active: boolean; rem: number }) 
       <Text
         style={{
           color: active ? theme.text : theme.dim,
-          fontSize: rem * 0.74,
+          fontSize: rem * 0.82,
           wrap: false,
         }}
       >

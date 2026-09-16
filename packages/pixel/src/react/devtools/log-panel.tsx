@@ -85,7 +85,7 @@ export function LogPanel(props: { rem: number }) {
   const { rem } = props;
   const programBuffer = useStore(consoleLogs.store);
   const engineBuffer = useStore(engineLogs.store);
-  const [source, setSource] = useState<(typeof SOURCES)[number]>("program");
+  const [source, setSource] = useState<(typeof SOURCES)[number]>("both");
   const [filter, setFilter] = useState("");
   const [level, setLevel] = useState<(typeof LEVEL_FILTERS)[number]>("all");
   const follow = useRef(true);

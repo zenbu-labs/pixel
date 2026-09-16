@@ -6,6 +6,7 @@ const AGREEMENT: f32 = 4.0;
 const SAMPLES_TO_TRUST: u32 = 3;
 const CORRELATION_WINDOW: Duration = Duration::from_millis(60);
 const SLOW_MOVE: f32 = 6.0;
+const HOVER_DRIFT: f32 = 32.0;
 const COVER_SLACK: f32 = 4.0;
 const ABSENCE_TRUST: Duration = Duration::from_millis(1000);
 const VERIFY_WINDOW: Duration = Duration::from_millis(2000);
@@ -146,7 +147,8 @@ impl HoverOracle {
         let Some(latch) = self.latch else {
             return Verdict::Unknown;
         };
-        if apart(latch.at_point, cursor) > 1.0 {
+      
+        if apart(latch.at_point, cursor) > HOVER_DRIFT {
             return Verdict::Unknown;
         }
         match latch.hovered {

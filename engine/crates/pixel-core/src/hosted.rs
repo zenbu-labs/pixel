@@ -90,8 +90,21 @@ pub(crate) fn clipboard(text: &str) -> Value {
     json!({ "type": "clipboard", "text": text })
 }
 
-pub(crate) fn placed(image_id: u32, cols: u32, rows: u32) -> Value {
-    json!({ "type": "placed", "imageId": image_id, "cols": cols, "rows": rows })
+pub(crate) fn placed(image_id: u32, cols: u32, rows: u32, cell: Option<(u32, u32)>) -> Value {
+    json!({ "type": "placed", "imageId": image_id, "cols": cols, "rows": rows, "cell": cell.map(|(w, h)| [w, h]) })
+}
+
+impl HostState {
+    pub(crate) fn fill_pixel_size(&mut self) {
+        if let Some((cw, ch)) = self.cell {
+            if self.size.width_px == 0 {
+                self.size.width_px = self.size.cols * cw;
+            }
+            if self.size.height_px == 0 {
+                self.size.height_px = self.size.rows * ch;
+            }
+        }
+    }
 }
 
 pub(crate) fn parse_line(line: &[u8], state: &mut HostState) -> Option<Event> {
@@ -102,6 +115,7 @@ pub(crate) fn parse_line(line: &[u8], state: &mut HostState) -> Option<Event> {
             if let Some(cell) = value["cell"].as_array() {
                 state.cell = Some((cell.first()?.as_u64()? as u32, cell.get(1)?.as_u64()? as u32));
             }
+            state.fill_pixel_size();
             Some(Event::WindowSize(state.size))
         }
         "key" => Some(Event::Key(key_from(&value)?)),
@@ -137,8 +151,8 @@ fn size_from(value: &Value) -> Option<WindowSize> {
     Some(WindowSize {
         cols: u32_at(value, "cols")?,
         rows: u32_at(value, "rows")?,
-        width_px: u32_at(value, "width")?,
-        height_px: u32_at(value, "height")?,
+        width_px: u32_at(value, "width").unwrap_or(0),
+        height_px: u32_at(value, "height").unwrap_or(0),
     })
 }
 

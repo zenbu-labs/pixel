@@ -46,6 +46,7 @@ pub fn log(level: LogLevel, target: &'static str, message: impl Into<String>) {
     let epoch_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0.0, |d| d.as_secs_f64() * 1000.0);
+    let message = message.into();
     let Ok(mut store) = LOGS.lock() else {
         return;
     };
@@ -59,7 +60,7 @@ pub fn log(level: LogLevel, target: &'static str, message: impl Into<String>) {
         epoch_ms,
         level,
         target,
-        message: message.into(),
+        message,
     });
 }
 
