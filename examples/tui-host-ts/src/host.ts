@@ -448,6 +448,7 @@ class Host {
       ...process.env,
       PIXEL_EMBED: this.sockPath,
       PIXEL_TTY: ttyName(),
+      EMBED_GATE_QUIET_MS: "0",
     };
     delete env.PIXEL_PANE;
     const log = fs.openSync(path.join(PACKAGE, "app.stderr.log"), "a");
