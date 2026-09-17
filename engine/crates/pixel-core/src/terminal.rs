@@ -23,6 +23,7 @@ pub enum Event {
     Mouse(Mouse),
     Paste(String),
     Focus(bool),
+    Visible(bool),
     WindowSize(WindowSize),
     ClipboardData {
         items: Vec<(String, Vec<u8>)>,

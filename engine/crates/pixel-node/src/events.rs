@@ -158,6 +158,7 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
         }),
         EngineEvent::HostClosed => json!({ "type": "hostClosed" }),
         EngineEvent::Devtools => json!({ "type": "devtools" }),
+        EngineEvent::Visible { visible } => json!({ "type": "visible", "visible": *visible }),
         EngineEvent::Handoff { tty, socket } => json!({
             "type": "handoff",
             "tty": tty,

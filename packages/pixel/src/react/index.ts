@@ -166,6 +166,7 @@ export interface RootOptions {
   onRightClick?: (event: { x: number; y: number }) => void;
   onPaste?: (text: string) => void;
   onFocus?: (focused: boolean) => void;
+  onVisible?: (visible: boolean) => void;
   onPasteImage?: (image: PastedImage) => void;
   onEngineExit?: (error: string | null) => void;
   onResize?: (size: { width: number; height: number; basePx: number }) => void;
@@ -252,6 +253,7 @@ interface EngineEventJson {
   deltaY?: number;
   precise?: boolean;
   focused?: boolean;
+  visible?: boolean;
   phase?: string;
   kind?: string;
   button?: string;
@@ -519,6 +521,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         break;
       case "focus":
         options.onFocus?.(!!event.focused);
+        break;
+      case "visible":
+        options.onVisible?.(!!event.visible);
         break;
       case "devtools":
         enableDevtools();

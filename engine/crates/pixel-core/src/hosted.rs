@@ -132,6 +132,7 @@ pub(crate) fn parse_line(line: &[u8], state: &mut HostState) -> Option<Event> {
             state.focused = value["focused"].as_bool()?;
             Some(Event::Focus(state.focused))
         }
+        "visible" => Some(Event::Visible(value["value"].as_bool()?)),
         "colors" => {
             state.colors = colors_from(&value["colors"]);
             Some(Event::Colors(state.colors))

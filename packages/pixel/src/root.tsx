@@ -204,6 +204,7 @@ export function createRoot(options: RootOptions = {}): Root {
       options.onFocus?.(focused);
       registry?.handleTerminalFocus(focused);
     },
+    onVisible: (visible) => options.onVisible?.(visible),
     onResize: (size) => {
       const ratio = cellZoom.ratio(engineRoot.info);
       if (registry) {

@@ -110,6 +110,9 @@ pub enum EngineEvent {
         tty: Option<String>,
         socket: Option<String>,
     },
+    Visible {
+        visible: bool,
+    },
     Click {
         view: usize,
         node: NodeId,
@@ -969,6 +972,7 @@ impl Engine {
             Event::ColorSchemeChanged => self.schedule_color_request(COLOR_SETTLE_DELAY),
             Event::Colors(colors) => self.apply_colors(colors, out),
             Event::Devtools => out.push(EngineEvent::Devtools),
+            Event::Visible(visible) => out.push(EngineEvent::Visible { visible }),
         }
         self.emit_selection_change(out);
         Ok(())
