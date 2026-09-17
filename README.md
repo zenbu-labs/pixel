@@ -2,6 +2,12 @@
 A library for building graphical applications that can run in the terminal
 
 
+## Notable features:
+- A react API to use a rust based graphics engine that runs in the terminal
+- WebView component that lets you render web content (based on top of a fork of electron)
+- Support for proxying network requests made by the webview over an SSH connection
+- Can be embedded inside other terminal applications
+- Built in devtools (element inspector, profiler, log viewer)
 
 ## Projects using pixel
 - [terminal-browser](https://github.com/zenbu-labs/terminal-browser) 3k ⭐'s  - a browser inside the terminal
