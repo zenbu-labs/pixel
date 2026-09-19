@@ -1,5 +1,5 @@
 name: electron build
-run-name: "build patched electron v${{ inputs.version }}"
+run-name: "build patched electron v${{ inputs.version }}${{ inputs.channel && format(' ({0})', inputs.channel) || '' }}"
 
 on:
   workflow_dispatch:
@@ -11,17 +11,23 @@ on:
         description: "Comma separated platforms to build; the others keep their published assets"
         required: false
         default: "darwin-arm64,darwin-x64,linux-x64,linux-arm64"
+      channel:
+        description: "Experimental channel name; publishes to electron-v<version>-<channel> as a prerelease instead of the real release"
+        required: false
+        default: ""
 
 permissions:
   contents: write
   issues: write
 
 concurrency:
-  group: electron-build-${{ inputs.version }}
+  group: electron-build-${{ inputs.version }}-${{ inputs.channel }}
   cancel-in-progress: false
 
 # Releases are tagged electron-v<version> so they never collide with this
-# package's own v<version> tags.
+# package's own v<version> tags. A channel build is tagged
+# electron-v<version>-<channel>, keeps the same asset names, and is consumed by
+# pointing PIXEL_ELECTRON_MIRROR at that release; it never touches the real one.
 jobs:
   plan:
     runs-on: ubuntu-latest
@@ -85,7 +91,7 @@ jobs:
           if-no-files-found: error
 
       - name: Report failure loudly
-        if: failure()
+        if: failure() && inputs.channel == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -121,7 +127,8 @@ jobs:
         run: |
           set -euo pipefail
           version="${{ inputs.version }}"
-          tag="electron-v$version"
+          channel="${{ inputs.channel }}"
+          tag="electron-v$version${channel:+-$channel}"
           cd out
           ls *.zip electron.d.ts >/dev/null
           # every platform leg generates the same electron.d.ts and lists it
@@ -136,9 +143,22 @@ jobs:
           Build: cookies on disk are encrypted with an OS keychain key (the \`EnableCookieEncryption\` fuse), the macOS app is marked \`LSUIElement\` so it never shows in the Dock, and it is signed with our Developer ID and notarized.
 
           Upstream release: https://github.com/electron/electron/releases/tag/v$version"
+          title="electron v$version (patched)"
+          prerelease=()
+          if [ -n "$channel" ]; then
+            title="electron v$version (patched, $channel)"
+            prerelease=(--prerelease)
+            notes="Experimental channel \`$channel\`, built from \`$GITHUB_REF_NAME\` at $GITHUB_SHA. Use it with:
+
+          \`\`\`
+          PIXEL_ELECTRON_MIRROR=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/$tag pnpm install
+          \`\`\`
+
+          $notes"
+          fi
           if ! gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" -R "$GITHUB_REPOSITORY" \
-              --title "electron v$version (patched)" --notes "$notes"
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" "${prerelease[@]}" \
+              --title "$title" --notes "$notes"
           fi
           gh release download "$tag" -R "$GITHUB_REPOSITORY" \
             --pattern "SHASUMS256.txt" || touch SHASUMS256.txt
@@ -152,7 +172,7 @@ jobs:
             *.zip electron.d.ts SHASUMS256.txt
 
       - name: Report failure loudly
-        if: failure()
+        if: failure() && inputs.channel == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -178,7 +198,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="electron-v${{ inputs.version }}"
+          tag="electron-v${{ inputs.version }}${{ inputs.channel && format('-{0}', inputs.channel) || '' }}"
           gh release download "$tag" -R "$GITHUB_REPOSITORY" --pattern "SHASUMS256.txt"
           missing=""
           for zip in $(gh release view "$tag" -R "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' | grep '\.zip$'); do
@@ -190,7 +210,7 @@ jobs:
           fi
 
       - name: Report failure loudly
-        if: failure()
+        if: failure() && inputs.channel == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
