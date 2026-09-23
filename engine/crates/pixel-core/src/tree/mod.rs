@@ -287,6 +287,7 @@ pub struct Tree {
     focus: Option<NodeId>,
     doc: DocSelectionState,
     base_px: f32,
+    terminal_cells: Option<(f32, f32)>,
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
@@ -319,6 +320,7 @@ impl Tree {
             focus: None,
             doc: DocSelectionState::default(),
             base_px: 16.0,
+            terminal_cells: None,
             needs_layout: true,
             needs_place: true,
             needs_paint: true,
@@ -894,6 +896,24 @@ impl Tree {
         self.needs_layout = true;
     }
 
+    /// Cell size of the terminal when it can draw text nodes marked `terminal_text`
+    /// itself, or `None` to rasterize them like any other text.
+    pub(crate) fn set_terminal_cells(&mut self, cell: Option<(u32, u32)>) {
+        let cells = cell.map(|(w, h)| (w as f32, h as f32));
+        if self.terminal_cells != cells {
+            self.terminal_cells = cells;
+            self.needs_layout = true;
+        }
+    }
+
+    pub(crate) fn draws_terminal_text(&self, node: &RNode) -> bool {
+        self.terminal_cells.is_some() && node.style.terminal_text && node.input.is_none()
+    }
+
+    pub(crate) fn paint_order(&self) -> &[NodeId] {
+        &self.paint_order
+    }
+
     pub fn flush_layout(&mut self, fonts: &[fontdue::Font], base_px: f32) {
         assert!(!fonts.is_empty());
         self.base_px = base_px;
@@ -936,6 +956,7 @@ impl Tree {
     }
 
     fn resolve(&mut self, id: NodeId, inherited: Resolved) {
+        let terminal_cells = self.terminal_cells;
         let node = self.node_mut(id);
         let resolved = Resolved {
             color: node.style.color.unwrap_or(inherited.color),
@@ -953,6 +974,7 @@ impl Tree {
         let image = node.image.clone();
         let wrap = node.style.wrap;
         let is_input = node.input.is_some();
+        let cells = terminal_cells.filter(|_| node.style.terminal_text && !is_input);
         let marks = node.marks().to_vec();
         let node_text = node.text.clone();
         let non_flow_only = children.iter().all(|&c| {
@@ -997,6 +1019,7 @@ impl Tree {
                 font: resolved.font,
                 wrap,
                 marks,
+                cells,
             })
         } else {
             None
@@ -1098,6 +1121,7 @@ impl Tree {
             font: node.resolved.font,
             wrap: node.style.wrap,
             marks: node.marks().to_vec(),
+            cells: None,
         };
         let taffy = node.taffy;
         if self.taffy.get_node_context(taffy) != Some(&ctx) {

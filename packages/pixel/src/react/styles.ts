@@ -76,6 +76,13 @@ export interface Style {
   scrollbar?: ScrollbarStyle;
   wrap?: boolean;
   ellipsis?: boolean;
+  /**
+   * Let the terminal draw this text with its own font, on its cell grid, above
+   * Pixel's graphics. The text is laid out in whole cells and ignores fontSize,
+   * font and soft wrapping. Where the terminal can't draw text over Pixel's
+   * frame (see EngineInfo.terminalText) it is rendered like any other text.
+   */
+  terminalText?: boolean;
   selectable?: boolean;
   selectionColor?: Color;
   /**
@@ -154,6 +161,7 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     hoverColor: parseColor(style.hoverColor),
     wrap: style.wrap,
     ellipsis: style.ellipsis,
+    terminalText: style.terminalText,
     selectable: style.selectable,
     selectionColor: parseColor(style.selectionColor),
     selectionMode: style.selectionMode,

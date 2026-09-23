@@ -317,7 +317,7 @@ fn paint_node(
         .or(enclosing_block);
     let in_block = enclosing_block.is_some();
 
-    if let Some(text) = &node.text {
+    if let Some(text) = node.text.as_ref().filter(|_| !tree.draws_terminal_text(node)) {
         let px = node.resolved.px;
         let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
         if let Some(line_metrics) = font.horizontal_line_metrics(px) {

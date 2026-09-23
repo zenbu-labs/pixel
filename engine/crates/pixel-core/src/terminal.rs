@@ -299,6 +299,8 @@ pub struct Terminal {
     color_scheme_updates: bool,
     color_query: Option<ColorQuery>,
     kitty_keyboard: bool,
+    text_layer: bool,
+    shown_text: Option<crate::terminal_text::TextGrid>,
 }
 
 #[derive(Default)]
@@ -495,6 +497,7 @@ impl Terminal {
             wrapper,
             crate::herdr::HerdrTarget::from_env(&env),
         );
+        terminal.text_layer = draws_text_over_images(&env);
         terminal.kitty_keyboard = terminal.probe_kitty_keyboard()?;
         if !terminal.kitty_keyboard {
             terminal.io.out().write_all(b"\x1b[>4;2m")?;
@@ -555,6 +558,8 @@ impl Terminal {
             color_scheme_updates: false,
             color_query: None,
             kitty_keyboard: false,
+            text_layer: false,
+            shown_text: None,
         }
     }
 
@@ -577,6 +582,12 @@ impl Terminal {
 
     pub fn kitty_keyboard(&self) -> bool {
         self.kitty_keyboard
+    }
+
+    /// Whether frames go straight to a terminal that can draw its own text on top
+    /// of them. Placeholder cells (tmux), host panes and herdr can't mix the two.
+    pub fn draws_text_layer(&self) -> bool {
+        self.text_layer && self.hosted.is_none() && !self.wrapper.relayed() && self.herdr_target.is_none()
     }
 
     pub fn set_key_event_types(&mut self, enabled: bool) -> io::Result<()> {
@@ -715,7 +726,11 @@ impl Terminal {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas) -> io::Result<usize> {
+    pub(crate) fn draw(
+        &mut self,
+        canvas: &Canvas,
+        text: Option<&crate::terminal_text::TextGrid>,
+    ) -> io::Result<usize> {
         let embedded = self.is_embedded();
         if let Some(state) = &self.hosted {
             if state.closed {
@@ -762,10 +777,13 @@ impl Terminal {
             .last_frame_size
             .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
         self.last_frame_size = Some((canvas.width, canvas.height));
+        let below_text = self.draws_text_layer();
+        let text = text.filter(|_| below_text);
+        let reshaped = matches!((&self.shown_text, text), (Some(shown), Some(next)) if !shown.same_shape(next));
 
         let mut frame = Vec::new();
         frame.extend_from_slice(b"\x1b[?2026h"); // mode 2026 atomic updates
-        if shrank {
+        if shrank || reshaped {
             frame.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
             frame.extend_from_slice(b"\x1b[2J");
             if let Ok(ws) = self.size() {
@@ -775,13 +793,14 @@ impl Terminal {
                 }
             }
             self.placeholders = None;
+            self.shown_text = None;
         }
         let placement = if self.wrapper.relayed() {
             let (cols, rows) = self.grid_for(canvas);
             Placement::Cells { cols, rows }
         } else {
             frame.extend_from_slice(b"\x1b[H");
-            Placement::Cursor
+            if below_text { Placement::BelowText } else { Placement::Cursor }
         };
         /*
          we eventualy need to be more principled about
@@ -821,6 +840,14 @@ impl Terminal {
         {
             frame.extend_from_slice(&crate::kitty::placeholder_grid(self.image_id, cols, rows));
             self.placeholders = Some((cols, rows));
+        }
+        match (text, self.shown_text.take()) {
+            (Some(next), shown) => {
+                next.write_changes(&shown.unwrap_or_else(|| next.blank()), &mut frame);
+                self.shown_text = Some(next.clone());
+            }
+            (None, Some(shown)) => shown.blank().write_changes(&shown, &mut frame),
+            (None, None) => {}
         }
         frame.extend_from_slice(b"\x1b[?2026l");
         crate::profiler::span("term.write", || {
@@ -1565,6 +1592,11 @@ fn unread_output_of(handle: &TtyHandle) -> Option<usize> {
     // SAFETY: TIOCOUTQ stores one c_int through the pointer; the fd is open and ours.
     let rc = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut count) };
     (rc == 0).then(|| count.max(0) as usize)
+}
+
+fn draws_text_over_images(env: &SessionEnv) -> bool {
+    matches!(env.var("TERM").as_deref(), Some("xterm-kitty" | "xterm-ghostty"))
+        || env.var("TERM_PROGRAM").as_deref() == Some("ghostty")
 }
 
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);

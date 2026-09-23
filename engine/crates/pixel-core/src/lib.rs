@@ -20,6 +20,7 @@ mod selection;
 mod style;
 pub mod surfaces;
 mod terminal;
+mod terminal_text;
 mod text_input;
 mod throttle;
 pub mod wrapper;

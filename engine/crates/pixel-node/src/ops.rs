@@ -526,6 +526,7 @@ struct StyleDto {
     scrollbar: Option<ScrollbarDto>,
     wrap: Option<bool>,
     ellipsis: Option<bool>,
+    terminal_text: Option<bool>,
     selectable: Option<bool>,
     selection_color: Option<Color>,
     selection_mode: Option<String>,
@@ -630,6 +631,7 @@ impl StyleDto {
             scrollbar: self.scrollbar.map(|s| s.into_style(rem)),
             wrap: self.wrap.unwrap_or(true),
             ellipsis: self.ellipsis.unwrap_or(false),
+            terminal_text: self.terminal_text.unwrap_or(false),
             selectable: self.selectable,
             selection_color: self.selection_color,
             selection_mode: match self.selection_mode.as_deref() {

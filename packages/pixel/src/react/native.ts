@@ -60,6 +60,8 @@ export interface EngineInfo {
   cellHeight: number;
   basePx: number;
   kittyKeyboard: boolean;
+  /** whether text styled with terminalText is drawn by the terminal */
+  terminalText: boolean;
   hosted: boolean;
   colors: TerminalColors;
 }
