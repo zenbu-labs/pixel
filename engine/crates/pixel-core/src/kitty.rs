@@ -7,6 +7,8 @@ const KITTY_CHUNK_SIZE: usize = 4096;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placement {
     Cursor,
+    /// like `Cursor`, but beneath the terminal's own text
+    BelowText,
     Cells { cols: u32, rows: u32 },
 }
 
@@ -17,6 +19,7 @@ impl Placement {
             // C=1: the cursor stays put after display, so a full-window image
             // can't push the cursor past the last row and force a scroll.
             Placement::Cursor => "p=1,C=1".to_string(),
+            Placement::BelowText => "p=1,C=1,z=-1".to_string(),
             Placement::Cells { cols, rows } => format!("U=1,c={cols},r={rows}"),
         }
     }

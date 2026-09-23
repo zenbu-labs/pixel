@@ -284,6 +284,7 @@ pub(crate) fn engine_info(engine: &Engine) -> serde_json::Value {
         "cellHeight": cell_h,
         "basePx": engine.base_px,
         "kittyKeyboard": engine.term.kitty_keyboard(),
+        "terminalText": engine.term.draws_text_layer(),
         "hosted": engine.term.is_hosted(),
         "colors": colors_json(&engine.colors),
     })

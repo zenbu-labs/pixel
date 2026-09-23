@@ -12,6 +12,7 @@ pub(crate) enum MeasureCtx {
         font: usize,
         wrap: bool,
         marks: Vec<Mark>,
+        cells: Option<(f32, f32)>,
     },
     Image {
         src: String,
@@ -30,10 +31,16 @@ pub(super) fn measure(
         Some(MeasureCtx::Image { size, .. }) => measure_image(known, available, *size),
         Some(MeasureCtx::Text {
             text,
+            cells: Some(cell),
+            ..
+        }) => measure_cells(text, *cell),
+        Some(MeasureCtx::Text {
+            text,
             px,
             font,
             wrap,
             marks,
+            cells: None,
         }) => measure_wrapped_text(known, available, text, *px, *font, *wrap, marks, fonts),
     }
 }
@@ -70,6 +77,14 @@ fn measure_image(
                 height: width * nh / nw,
             }
         }
+    }
+}
+
+fn measure_cells(text: &str, (cell_w, cell_h): (f32, f32)) -> taffy::Size<f32> {
+    let widest = text.split('\n').map(crate::terminal_text::line_cells).max().unwrap_or(0);
+    taffy::Size {
+        width: widest as f32 * cell_w,
+        height: text.split('\n').count() as f32 * cell_h,
     }
 }
 

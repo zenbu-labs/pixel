@@ -233,6 +233,9 @@ interface EngineEventJson {
   width?: number;
   height?: number;
   basePx?: number;
+  cellWidth?: number;
+  cellHeight?: number;
+  terminalText?: boolean;
   colors?: TerminalColors;
   message?: string;
   error?: string | null;
@@ -492,6 +495,9 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
           info.width = size.width;
           info.height = size.height;
           info.basePx = size.basePx;
+          info.cellWidth = event.cellWidth!;
+          info.cellHeight = event.cellHeight!;
+          info.terminalText = event.terminalText!;
           options.onResize?.(size);
         } else if (devtoolsBridge() === bridge) {
           devtoolsStore.update((s) => ({ ...s, ...size }));

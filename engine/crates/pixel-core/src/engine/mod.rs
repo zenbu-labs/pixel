@@ -28,6 +28,7 @@ use crate::menu::MenuController;
 use crate::native::NativeScroll;
 use crate::paint::paint;
 use crate::profiler::{ProfileData, Profiler};
+use crate::terminal_text::TextGrid;
 use crate::scroll::ScrollProfile;
 use crate::scroll::profiles::Smooth;
 use crate::style::Color;
@@ -169,6 +170,8 @@ pub enum EngineEvent {
         width: u32,
         height: u32,
         base_px: f32,
+        cell: (u32, u32),
+        terminal_text: bool,
     },
     Colors {
         colors: TerminalColors,
@@ -543,6 +546,8 @@ impl Engine {
                 width: size.0,
                 height: size.1,
                 base_px: self.base_px,
+                cell: self.cell,
+                terminal_text: self.term.draws_text_layer(),
             });
         }
     }
@@ -595,7 +600,35 @@ impl Engine {
         }
     }
 
+    fn text_cell(&self) -> Option<(u32, u32)> {
+        self.term.draws_text_layer().then_some(self.cell)
+    }
+
+    fn sync_text_cells(&mut self) {
+        let cell = self.text_cell();
+        for view in &mut self.comp.views {
+            view.tree.set_terminal_cells(cell);
+        }
+    }
+
+    fn text_grid(&self) -> Option<TextGrid> {
+        let cell = self.text_cell()?;
+        let (width, height) = self.comp.window;
+        let mut grid = TextGrid::new(width / cell.0.max(1), height / cell.1.max(1), cell);
+        let backdrop = self.colors.background.map_or([0, 0, 0], |[r, g, b, _]| [r, g, b]);
+        for i in self.comp.active_views() {
+            let cursor = self
+                .cursor
+                .filter(|&(x, _)| self.comp.view_at(x) == i)
+                .map(|c| self.comp.to_local(i, c));
+            let view = &self.comp.views[i];
+            grid.place_tree(&view.tree, view.origin_x as f32, cursor, &self.comp.frame, backdrop);
+        }
+        Some(grid)
+    }
+
     pub fn flush_view_layout(&mut self, view: usize) {
+        self.sync_text_cells();
         let base_px = self.base_px;
         let fonts = &self.fonts;
         if let Some(v) = self.comp.views.get_mut(view) {
@@ -1043,6 +1076,7 @@ impl Engine {
         } else {
             self.frame_deferred = false;
         }
+        self.sync_text_cells();
         let active = self.comp.active_views();
         let work: Vec<(usize, Option<Rect>)> = active
             .iter()
@@ -1105,7 +1139,8 @@ impl Engine {
                 return Ok(());
             }
             self.compose(&painted);
-            let bytes = crate::profiler::span("draw", || self.term.draw(&self.comp.frame))?;
+            let text = crate::profiler::span("text", || self.text_grid());
+            let bytes = crate::profiler::span("draw", || self.term.draw(&self.comp.frame, text.as_ref()))?;
             crate::profiler::count("bytes", bytes as u64);
             self.last_frame_bytes = bytes;
 
