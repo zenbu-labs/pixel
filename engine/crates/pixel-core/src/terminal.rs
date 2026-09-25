@@ -1178,7 +1178,14 @@ impl Terminal {
         };
         let stdin_borrow = self.io.read_fd();
         let stdin_fd = rustix::event::PollFd::new(&stdin_borrow, rustix::event::PollFlags::IN);
+        // A zero-timeout peek must not drain a wake: the caller goes on to a blocking wait,
+        // which would then sleep through work queued before the peek.
+        let peek = wait == Some(Duration::ZERO);
         match &self.wake_rx {
+            _ if peek => {
+                let mut fds = [stdin_fd];
+                Ok(poll(&mut fds)? > 0)
+            }
             None => {
                 let mut fds = [stdin_fd];
                 Ok(poll(&mut fds)? > 0)
@@ -3153,5 +3160,23 @@ mod tty_tests {
         });
         let got = term.poll_event(None).unwrap();
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
+    }
+
+    #[test]
+    fn a_zero_timeout_poll_leaves_a_wake_for_the_next_wait() {
+        let (master, _slave, path) = open_pty();
+        let _drain = drain(&master);
+        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let waker = term.waker().unwrap();
+
+        waker.wake();
+        assert!(term.poll_event(Some(Duration::ZERO)).unwrap().is_none());
+        let start = Instant::now();
+        term.poll_event(Some(Duration::from_millis(1000))).unwrap();
+        assert!(
+            start.elapsed() < Duration::from_millis(500),
+            "the zero-timeout poll swallowed the wake, so the next wait slept {:?}",
+            start.elapsed()
+        );
     }
 }
