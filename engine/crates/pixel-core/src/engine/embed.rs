@@ -44,17 +44,19 @@ impl Engine {
         let incoming: u64 = damage.map_or(u64::from(width) * u64::from(height), |rects| {
             rects.iter().map(|r| r.clamped(width, height).area()).sum()
         });
-        crate::profiler::count("surface.damage_px", incoming);
-        let cpu = crate::profiler::thread_cpu_us();
+        crate::profiler::count("surface.damage_px", || incoming);
+        let cpu = crate::profiler::cpu_us();
         // why is this written as a write, but anyways this is where we do the damage comparison
         let changed = crate::profiler::span("surface.convert", || {
             crate::surfaces::write(surface, width, height, damage, bgra, stride, self.compare_surfaces)
         });
-        if cpu > 0 {
-            crate::profiler::count("cpu.convert_thread_us", crate::profiler::thread_cpu_us() - cpu);
+        if let Some((thread_before, _)) = cpu
+            && let Some((thread_after, _)) = crate::profiler::cpu_us()
+        {
+            crate::profiler::count("cpu.convert_thread_us", || thread_after - thread_before);
         }
-        crate::profiler::count("surface.rows", changed.iter().map(|r| u64::from(r.h)).sum());
-        crate::profiler::count("surface.changed_px", changed.iter().map(|r| r.area()).sum());
+        crate::profiler::count("surface.rows", || changed.iter().map(|r| u64::from(r.h)).sum());
+        crate::profiler::count("surface.changed_px", || changed.iter().map(|r| r.area()).sum());
         self.damage_surface_views(surface, &changed);
         Ok(row_bytes * height as usize)
     }

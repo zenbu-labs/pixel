@@ -146,7 +146,7 @@ impl Autoprofile {
             .is_some_and(|at| std::time::Instant::now() >= at)
         {
             self.stop_at = None;
-            if let Ok(Some(path)) = engine.profiler.toggle() {
+            if let Ok(Some(path)) = engine.profile_stop_to_file() {
                 pixel_core::logging::info(
                     "profiler",
                     format!("autoprofile written to {}", path.display()),

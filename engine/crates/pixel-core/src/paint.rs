@@ -49,12 +49,12 @@ impl PaintStats {
             at += dur;
         }
         let (boxes, skipped, paths, clipped) = crate::canvas::take_canvas_stats();
-        crate::profiler::count("paint.boxes", boxes);
-        crate::profiler::count("paint.boxes.skipped", skipped);
-        crate::profiler::count("paint.paths", paths);
-        crate::profiler::count("paint.paths.clipped", clipped);
-        crate::profiler::count("paint.nodes", self.nodes);
-        crate::profiler::count("paint.glyphs", self.glyph_count);
+        crate::profiler::count("paint.boxes", || boxes);
+        crate::profiler::count("paint.boxes.skipped", || skipped);
+        crate::profiler::count("paint.paths", || paths);
+        crate::profiler::count("paint.paths.clipped", || clipped);
+        crate::profiler::count("paint.nodes", || self.nodes);
+        crate::profiler::count("paint.glyphs", || self.glyph_count);
     }
 }
 

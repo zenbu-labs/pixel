@@ -935,7 +935,7 @@ impl Canvas {
             return;
         }
         // resample?
-        crate::profiler::count("surface.resampled", 1);
+        crate::profiler::count("surface.resampled", || 1);
         LAST_RESAMPLE.with(|last| {
             let sizes = (src_w, src_h, dst_w, dst_h);
             if last.get() != Some(sizes) {

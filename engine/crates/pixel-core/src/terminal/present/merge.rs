@@ -68,7 +68,7 @@ pub(super) fn compact(live: &[Patch], keep: usize, max_union: u64, budget: u64, 
         send.retain(|p| p.id != first.id && live.iter().any(|l| l.id == p.id));
         send.push(merged);
     }
-    crate::profiler::count("present.compactions", send.len() as u64);
+    crate::profiler::count("present.compactions", || send.len() as u64);
     Compaction { send, retire, live }
 }
 

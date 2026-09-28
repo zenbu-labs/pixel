@@ -88,9 +88,7 @@ impl Engine {
                     return Ok(());
                 }
                 if self.comp.on_divider(point.0) {
-                    if crate::profiler::is_recording() {
-                        crate::profiler::mark("drag", 0, "divider drag".into());
-                    }
+                    crate::profiler::mark("drag", 0, || "divider drag".into());
                     self.comp.divider_drag = true;
                     self.comp.dirty = true;
                     return Ok(());
@@ -455,7 +453,7 @@ impl Engine {
             Some(key) => format!("{name} #{key}"),
             None => format!("{name} {},{}", local.0 as i32, local.1 as i32),
         };
-        crate::profiler::mark(name, view as u32, label);
+        crate::profiler::mark(name, view as u32, || label);
     }
 
     pub(super) fn mark_scroll(&mut self, view: usize) {
@@ -471,7 +469,7 @@ impl Engine {
         crate::profiler::mark_or_extend(
             "scroll",
             view as u32,
-            format!("scroll x{}", self.scroll_burst),
+            || format!("scroll x{}", self.scroll_burst),
             350.0,
         );
     }

@@ -234,7 +234,7 @@ impl Compositor {
                 let Some(p) = painted.iter().find(|p| p.view == view) else {
                     continue;
                 };
-                crate::profiler::count("compose.px", p.parts.iter().map(|r| r.area()).sum());
+                crate::profiler::count("compose.px", || p.parts.iter().map(|r| r.area()).sum());
                 for part in &p.parts {
                     blit(frame, canvas, origin, *part, straighten);
                 }

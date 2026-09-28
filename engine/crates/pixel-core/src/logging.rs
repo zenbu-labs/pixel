@@ -148,12 +148,8 @@ pub fn entries_after(after: u64) -> Vec<LogEntry> {
     let Ok(store) = LOGS.lock() else {
         return Vec::new();
     };
-    store
-        .entries
-        .iter()
-        .filter(|e| e.seq >= after)
-        .cloned()
-        .collect()
+    let fresh = store.entries.iter().rev().take_while(|e| e.seq >= after).count();
+    store.entries.range(store.entries.len() - fresh..).cloned().collect()
 }
 
 #[cfg(test)]

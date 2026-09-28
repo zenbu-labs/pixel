@@ -120,8 +120,7 @@ impl Engine {
         if work.is_empty() && !self.comp.dirty {
             return Ok(());
         }
-        let cpu_thread = crate::profiler::thread_cpu_us();
-        let cpu_process = crate::profiler::process_cpu_us();
+        let cpu = crate::profiler::cpu_us();
         crate::profiler::span("frame", || -> io::Result<()> {
             let start = Instant::now();
             let mut painted: Vec<Painted> = Vec::new();
@@ -159,7 +158,7 @@ impl Engine {
                         }
                     }
                 }
-                crate::profiler::count("paint.px", parts.iter().map(|p| p.area()).sum());
+                crate::profiler::count("paint.px", || parts.iter().map(|p| p.area()).sum());
                 for part in &parts {
                     view.canvas.push_clip(part.x as f32, part.y as f32, part.w as f32, part.h as f32);
                     paint(
@@ -190,10 +189,12 @@ impl Engine {
             let direct = self.term.draws_locally();
             self.compose(&painted, direct);
             let bytes = crate::profiler::span("draw", || self.term.draw(self.comp.frame()))?;
-            crate::profiler::count("bytes", bytes as u64);
-            if cpu_thread > 0 {
-                crate::profiler::count("cpu.frame_thread_us", crate::profiler::thread_cpu_us() - cpu_thread);
-                crate::profiler::count("cpu.frame_process_us", crate::profiler::process_cpu_us() - cpu_process);
+            crate::profiler::count("bytes", || bytes as u64);
+            if let Some((thread_before, process_before)) = cpu
+                && let Some((thread_after, process_after)) = crate::profiler::cpu_us()
+            {
+                crate::profiler::count("cpu.frame_thread_us", || thread_after - thread_before);
+                crate::profiler::count("cpu.frame_process_us", || process_after - process_before);
             }
             self.last_frame_bytes = bytes;
 

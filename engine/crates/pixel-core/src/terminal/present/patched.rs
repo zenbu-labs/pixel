@@ -181,9 +181,9 @@ impl Terminal {
             tile.dirty = false;
             tile.sent = now_sent;
         }
-        let pixels = report.sent.iter().map(|r| r.area()).sum();
-        crate::profiler::count("present.tiles", report.sent.len() as u64);
-        crate::profiler::count("present.tiles_dirty", report.dirty);
+        let pixels = || report.sent.iter().map(|r| r.area()).sum();
+        crate::profiler::count("present.tiles", || report.sent.len() as u64);
+        crate::profiler::count("present.tiles_dirty", || report.dirty);
         crate::profiler::count("present.tile_pixels", pixels);
         crate::profiler::count("present.pixels", pixels);
         Ok((out.len() - start, report))
@@ -212,8 +212,8 @@ impl Terminal {
             })?;
             pixels += patch.rect.area();
         }
-        crate::profiler::count("present.patches", send.len() as u64);
-        crate::profiler::count("present.pixels", pixels);
+        crate::profiler::count("present.patches", || send.len() as u64);
+        crate::profiler::count("present.pixels", || pixels);
         let written = out.len() - start;
         for patch in &send {
             for piece in self.patches.compared_pieces(patch.rect) {
@@ -231,7 +231,7 @@ impl Terminal {
 
     fn flatten(&mut self, frame: Frame<'_>, reason: Flatten, out: &mut Vec<u8>) -> io::Result<usize> {
         let canvas = frame.canvas;
-        crate::profiler::count("present.whole_frame", 1);
+        crate::profiler::count("present.whole_frame", || 1);
         let ms_since = |at: Option<std::time::Instant>| {
             at.map_or("never".to_string(), |at| format!("{}ms ago", at.elapsed().as_millis()))
         };

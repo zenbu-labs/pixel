@@ -190,7 +190,7 @@ pub fn write(
         }
         // eh?
         if changed.is_empty() {
-            crate::profiler::count("surface.unchanged", 1);
+            crate::profiler::count("surface.unchanged", || 1);
         }
         changed
     })

@@ -44,7 +44,7 @@ impl Terminal {
         match strategy {
             TransmitStrategy::Skip => Ok(0),
             TransmitStrategy::Flatten(reason) => {
-                crate::profiler::count("present.whole_frame", 1);
+                crate::profiler::count("present.whole_frame", || 1);
                 crate::logging::info("present", format!("full frame ({reason:?}) via frame edits"));
                 self.animation.base = Some(size);
                 let pixels = super::straight_pixels(canvas, frame.premultiplied);
@@ -77,8 +77,8 @@ impl Terminal {
                         self.flash(out, patch.rect, false);
                     }
                 }
-                crate::profiler::count("present.patches", send.len() as u64);
-                crate::profiler::count("present.pixels", pixels);
+                crate::profiler::count("present.patches", || send.len() as u64);
+                crate::profiler::count("present.pixels", || pixels);
                 Ok(out.len() - start)
             }
         }

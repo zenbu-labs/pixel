@@ -366,7 +366,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     null
   );
-  if (devtoolsEnabled) enableDevtools();
+  if (devtoolsEnabled) installConsoleCapture();
 
   const fontIds = new Map<string, number>();
   const fontRequests = new Map<

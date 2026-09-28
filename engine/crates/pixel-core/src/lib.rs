@@ -38,7 +38,7 @@ pub use menu::{CONTEXT_MENU_KEY, MenuEntry, MenuItem, MenuStyle, context_menu};
 pub use native::{NativeEvent, NativeScroll};
 pub use terminal::{Retarget, SessionEnv};
 pub use paint::paint;
-pub use profiler::{CounterRecord, ProfileData, Profiler, SpanRecord};
+pub use profiler::{CounterRecord, ProfileData, SpanRecord};
 pub use shape::{LineCap, LineJoin, PathCmd, ShapeProps, ShapeStroke, build_path, parse_path_data, skia_stroke};
 pub use scroll::profiles::{Glide, Smooth, Tui};
 pub use scroll::{ScrollProfile, ScrollState};

@@ -51,7 +51,7 @@ impl Terminal {
         if self.highlight_transmits {
             self.flash(out, Rect::sized(canvas.width, canvas.height), true);
         }
-        crate::profiler::count("present.pixels", canvas.width as u64 * canvas.height as u64);
+        crate::profiler::count("present.pixels", || canvas.width as u64 * canvas.height as u64);
         Ok(out.len() - start)
     }
 }

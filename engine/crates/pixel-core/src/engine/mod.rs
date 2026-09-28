@@ -26,7 +26,7 @@ use crate::wrapper::Wrapper;
 use crate::logging;
 use crate::menu::MenuController;
 use crate::native::NativeScroll;
-use crate::profiler::{ProfileData, Profiler};
+use crate::profiler::ProfileData;
 use crate::scroll::ScrollProfile;
 use crate::scroll::profiles::Smooth;
 use crate::style::Color;
@@ -287,7 +287,6 @@ pub struct Engine {
     pub comp: Compositor,
     pub fonts: Vec<fontdue::Font>,
     cell_metrics_font: usize,
-    pub profiler: Profiler,
     pub cell: (u32, u32),
     cell_estimate: Option<(u32, u32)>,
     pub base_px: f32,
@@ -416,7 +415,6 @@ impl Engine {
             comp: Compositor::new(window),
             fonts: config.fonts,
             cell_metrics_font: config.cell_metrics_font,
-            profiler: Profiler::new(),
             cell,
             cell_estimate: ws.cell_size(),
             base_px,
@@ -572,13 +570,6 @@ impl Engine {
                 .is_some_and(|at| at.elapsed() < Duration::from_millis(1500))
     }
 
-    pub fn profiler_toggle(&mut self) -> io::Result<Option<std::path::PathBuf>> {
-        if crate::profiler::is_recording() {
-            crate::image_cache::emit_pending_waits();
-        }
-        self.profiler.toggle()
-    }
-
     pub fn profile_start(&mut self) {
         if !crate::profiler::is_recording() {
             logging::info("profiler", "recording started");
@@ -587,16 +578,20 @@ impl Engine {
     }
 
     pub fn profile_stop(&mut self) {
-        if crate::profiler::is_recording() {
-            crate::image_cache::emit_pending_waits();
-        }
-        if let Some(data) = crate::profiler::stop() {
-            logging::info(
-                "profiler",
-                format!("recording stopped, {} spans", data.spans.len()),
-            );
+        if let Some(data) = self.stop_recording() {
             self.pending.push(EngineEvent::Profile(data));
         }
+    }
+
+    pub fn profile_stop_to_file(&mut self) -> io::Result<Option<std::path::PathBuf>> {
+        self.stop_recording().map(|data| crate::profiler::write_report(&data)).transpose()
+    }
+
+    fn stop_recording(&mut self) -> Option<ProfileData> {
+        crate::image_cache::emit_pending_waits();
+        let data = crate::profiler::stop()?;
+        logging::info("profiler", format!("recording stopped, {} spans", data.spans.len()));
+        Some(data)
     }
 
     pub fn set_cpu_throttle(&mut self, rate: f32) {
@@ -607,9 +602,7 @@ impl Engine {
         self.cpu_throttle.set_rate(rate);
         let applied = self.cpu_throttle.rate();
         logging::info("engine", format!("cpu throttle {applied}x"));
-        if crate::profiler::is_recording() {
-            crate::profiler::mark("throttle", 0, format!("cpu throttle {applied}x"));
-        }
+        crate::profiler::mark("throttle", 0, || format!("cpu throttle {applied}x"));
     }
 
     pub fn flush_view_layout(&mut self, view: usize) {
@@ -891,16 +884,9 @@ impl Engine {
                 cell.1,
             ),
         );
-        if crate::profiler::is_recording() {
-            crate::profiler::mark(
-                "resize",
-                0,
-                format!(
-                    "resize {}x{} cell {}x{}",
-                    window.0, window.1, cell.0, cell.1
-                ),
-            );
-        }
+        crate::profiler::mark("resize", 0, || {
+            format!("resize {}x{} cell {}x{}", window.0, window.1, cell.0, cell.1)
+        });
         let base_changed = (base_px - self.base_px).abs() > 0.01;
         self.hover_oracle.invalidate();
         self.comp.window = window;
@@ -951,13 +937,9 @@ impl Engine {
             }),
             Event::Key(key) => self.handle_key(key, out)?,
             Event::Paste(text) => {
-                if crate::profiler::is_recording() {
-                    crate::profiler::mark(
-                        "paste",
-                        self.active_view as u32,
-                        format!("paste ({} chars)", text.chars().count()),
-                    );
-                }
+                crate::profiler::mark("paste", self.active_view as u32, || {
+                    format!("paste ({} chars)", text.chars().count())
+                });
                 if let Some((view, focus)) = self.focused() {
                     if let Some(image) = crate::clipboard_image::image_path_from_paste(&text) {
                         self.push_paste_image(view, focus, image, out);
