@@ -1,7 +1,14 @@
 import React, { useEffect, useState } from "react";
 
-import { Box, Text } from "../components";
-import { clearRecording, setCpuThrottle, startRecording, stopRecording } from "./controller";
+import { Box, Input, Text } from "../components";
+import {
+  clearRecording,
+  setCpuThrottle,
+  setHighlightTransmits,
+  setMaxFps,
+  startRecording,
+  stopRecording,
+} from "./controller";
 import { exportProfile } from "./export-profile";
 import { createStore, useStore } from "./store";
 import { devtoolsStore, ProfileSession, profilerStore, TimeSpan } from "./stores";
@@ -510,6 +517,32 @@ export function ProfilerPanel(props: { rem: number }) {
             const rates = [1, 2, 4, 10];
             const next = rates[(rates.indexOf(devtools.cpuRate) + 1) % rates.length];
             setCpuThrottle(next);
+          }}
+        />
+        <Button
+          rem={rem}
+          label="outline sends"
+          active={devtools.highlightTransmits}
+          onClick={() => setHighlightTransmits(!devtools.highlightTransmits)}
+        />
+        <Text style={{ color: theme.faint, fontSize: rem * 0.66, wrap: false }}>fps</Text>
+        <Input
+          style={{
+            width: rem * 2.6,
+            height: rem * 1.3,
+            fontSize: rem * 0.7,
+            color: theme.text,
+            font: MONO,
+            wrap: false,
+            padding: { left: rem * 0.3, right: rem * 0.3 },
+            border: { width: 1, color: theme.border },
+            cornerRadius: rem * 0.2,
+          }}
+          defaultValue={devtools.maxFps === 0 ? "off" : String(devtools.maxFps)}
+          onSubmit={(text) => {
+            const value = text.trim().toLowerCase();
+            const fps = value === "off" || value === "0" ? 0 : Number(value);
+            if (Number.isFinite(fps) && fps >= 0) setMaxFps(fps);
           }}
         />
         {session && !exportedTo && <Summary session={session} rem={rem} />}

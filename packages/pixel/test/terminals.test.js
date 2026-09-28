@@ -279,6 +279,21 @@ test("ghostty scripts the instance this shell runs inside, not the newest one", 
   assert.ok(commands.includes(`osascript -l JavaScript - ${process.ppid} list`));
 });
 
+test("ghostty scripts a fork like forky this shell runs inside even while ghostty itself is open", onMac, async () => {
+  const FORKY_BIN = "/Applications/Forky.app/Contents/MacOS/ghostty";
+  const { run, commands } = recorder({
+    "ps -axo pid=,ppid=,tty=,command=": processTable([
+      [process.pid, process.ppid, "ttys001", "node test"],
+      [process.ppid, 1, "??", FORKY_BIN],
+      [9001, 1, "??", GHOSTTY_BIN],
+    ]),
+    [`osascript -l JavaScript - ${process.ppid} list`]: "w1\tt1\tAAAA\t\t\t/Users/me\n",
+  });
+  await detect(GHOSTTY_ENV, run).listPanes();
+  assert.ok(commands.includes(`osascript -l JavaScript - ${process.ppid} list`));
+  assert.ok(!commands.includes("osascript -l JavaScript - 9001 list"));
+});
+
 test("ghostty falls back to the only instance when this shell is not inside one", onMac, async () => {
   const { run, commands } = recorder({
     "ps -axo pid=,ppid=,tty=,command=": processTable([

@@ -29,8 +29,6 @@ pub(crate) struct Herdr {
     frames: BufReader<UnixStream>,
     directory: PathBuf,
     cell: (u32, u32),
-    // Set when the host only takes bgra frames; the copy into the frame file
-    // then swaps channels instead of costing a second pass.
     bgra: bool,
     files: Vec<FrameFile>,
     retired: Vec<FrameFile>,

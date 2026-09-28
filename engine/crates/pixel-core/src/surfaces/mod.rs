@@ -5,6 +5,16 @@ use std::collections::HashMap;
 
 mod convert;
 
+/// A frame area whose pixels are fully opaque. `surface` says whose pixels they are: a
+/// webview's, whose own damage says exactly what changed there, or `None` for an opaque UI
+/// node, whose pixels change through repaints and have to be compared. If the surface at a
+/// rect changes, every pixel there changed even though no damage said so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpaqueArea {
+    pub surface: Option<u32>,
+    pub rect: Rect,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Rect {
     pub x: u32,
@@ -49,8 +59,80 @@ impl Rect {
             h: self.h.min(height - y),
         }
     }
+
+    pub fn area(self) -> u64 {
+        u64::from(self.w) * u64::from(self.h)
+    }
+
+    pub fn contains(self, other: Rect) -> bool {
+        !other.is_empty()
+            && other.x >= self.x
+            && other.y >= self.y
+            && other.x + other.w <= self.x + self.w
+            && other.y + other.h <= self.y + self.h
+    }
+
+    pub fn intersects(self, other: Rect) -> bool {
+        !self.is_empty()
+            && !other.is_empty()
+            && self.x < other.x + other.w
+            && other.x < self.x + self.w
+            && self.y < other.y + other.h
+            && other.y < self.y + self.h
+    }
 }
 
+/// One row of a compared region that differs, as the pixel span `[x0, x1)`.
+#[derive(Clone, Copy, Debug)]
+pub struct RowChange {
+    pub y: u32,
+    pub x0: u32,
+    pub x1: u32,
+}
+
+/// Joining two rects is worth it while the blank pixels it adds cost less than the image it
+/// saves. This is what one image is worth to ghostty, measured in pixels of upload, and
+/// every place that joins damage rects uses it. Measured 2026-09-24 against the bench
+/// fixtures: 30k beats 3k by 25% on scrolling text and 4 to 10% on canvas, caret and hover,
+/// costs 1 to 6% on scattered small changes, and nothing improves past 30k.
+pub const IMAGE_OVERHEAD_PX: u64 = 30_000;
+/// A ceiling on runaway growth, not a preference: every rect is a full paint pass of its
+/// own, and the presenter joins further on its own terms when it must. The pass per rect is
+/// only there in case something is drawn over the surface; inside an opaque zone a straight
+/// blit would do, and painting that way would make this ceiling mostly moot.
+const MAX_CHANGED_RECTS: usize = 32;
+
+/// Blank pixels a rect covering both would add over keeping them apart.
+fn wasted(a: Rect, b: Rect) -> u64 {
+    a.union(b).area().saturating_sub(a.area() + b.area())
+}
+
+/// The one rule for joining damage rects. Walks them in the order given and extends the rect
+/// in hand while doing so wastes fewer pixels than an extra image would cost, so callers hand
+/// over rects in scan order: top to bottom, left to right.
+pub fn group_rects(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
+    let mut out: Vec<Rect> = Vec::new();
+    for rect in rects {
+        if rect.is_empty() {
+            continue;
+        }
+        let full = out.len() >= MAX_CHANGED_RECTS;
+        match out.last_mut() {
+            Some(last) if full || wasted(*last, rect) < IMAGE_OVERHEAD_PX => *last = last.union(rect),
+            _ => out.push(rect),
+        }
+    }
+    out
+}
+
+/// Turns the rows a compare found different into rects, one band per row, joined by
+/// `group_rects`.
+pub fn rects_from_rows(changes: Vec<RowChange>) -> Vec<Rect> {
+    group_rects(changes.into_iter().map(|c| Rect { x: c.x0, y: c.y, w: c.x1 - c.x0, h: 1 }))
+}
+
+/// A browser's latest pixels, kept in the BGRA order Chromium delivers so incoming frames
+/// compare as raw bytes. Painting swizzles to RGBA for only the pixels it draws.
 pub struct Surface {
     pub width: u32,
     pub height: u32,
@@ -66,10 +148,11 @@ pub fn write(
     id: u32,
     width: u32,
     height: u32,
-    damage: Option<Rect>,
+    damage: Option<&[Rect]>,
     bgra: &[u8],
     stride: usize,
-) -> Rect {
+    compare: bool,
+) -> Vec<Rect> {
     SURFACES.with_borrow_mut(|surfaces| {
         let surface = surfaces.entry(id).or_insert(Surface {
             width: 0,
@@ -84,19 +167,32 @@ pub fn write(
                 .pixels
                 .resize(width as usize * height as usize * 4, 0);
         }
-        let (region, compare) = match damage {
-            Some(damage) if !resized => (damage.clamped(width, height), false),
-            _ => (Rect::sized(width, height), !resized),
-        };
-        if region.is_empty() {
-            return region;
+        if resized {
+            let whole = Rect::sized(width, height);
+            convert::region(&mut surface.pixels, width, bgra, stride, whole);
+            return vec![whole];
         }
-        let changed = convert::region(&mut surface.pixels, width, bgra, stride, region, compare);
-        if !changed && !resized {
+        let whole = [Rect::sized(width, height)];
+        let regions: &[Rect] = damage.unwrap_or(&whole);
+        let mut changed: Vec<Rect> = Vec::new();
+        for region in regions {
+            let region = region.clamped(width, height);
+            if region.is_empty() {
+                continue;
+            }
+            if compare {
+                changed.extend(convert::region_tight(&mut surface.pixels, width, bgra, stride, region));
+            } else {
+                // Taking the browser's rect at its word: copy it whole and report all of it.
+                convert::region(&mut surface.pixels, width, bgra, stride, region);
+                changed.push(region);
+            }
+        }
+        // eh?
+        if changed.is_empty() {
             crate::profiler::count("surface.unchanged", 1);
-            return Rect::default();
         }
-        region
+        changed
     })
 }
 
@@ -137,52 +233,88 @@ mod tests {
     fn the_first_frame_writes_the_whole_surface() {
         let source = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
         let damage = Rect { x: 0, y: 0, w: 1, h: 1 };
-        assert_eq!(
-            write(1, 2, 1, Some(damage), &source, 8),
-            Rect::sized(2, 1)
-        );
-        with(1, |s| assert_eq!(s.pixels, [3, 2, 1, 4, 7, 6, 5, 8])).unwrap();
+        assert_eq!(write(1, 2, 1, Some(&[damage]), &source, 8, true), vec![Rect::sized(2, 1)]);
+        with(1, |s| assert_eq!(s.pixels, source)).unwrap();
         remove(1);
     }
 
     #[test]
     fn later_frames_only_touch_the_damaged_pixels() {
-        write(2, 2, 1, None, &bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]), 8);
+        write(2, 2, 1, None, &bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]), 8, true);
         let second = bgra(&[[9, 9, 9, 9], [10, 20, 30, 40]]);
         let damage = Rect { x: 1, y: 0, w: 1, h: 1 };
-        assert_eq!(write(2, 2, 1, Some(damage), &second, 8), damage);
-        with(2, |s| assert_eq!(s.pixels, [3, 2, 1, 4, 30, 20, 10, 40])).unwrap();
+        assert_eq!(write(2, 2, 1, Some(&[damage]), &second, 8, true), vec![damage]);
+        with(2, |s| assert_eq!(s.pixels, [1, 2, 3, 4, 10, 20, 30, 40])).unwrap();
         remove(2);
     }
 
     #[test]
     fn a_resize_ignores_damage_because_there_is_nothing_to_keep() {
-        write(3, 1, 1, None, &bgra(&[[1, 2, 3, 4]]), 4);
+        write(3, 1, 1, None, &bgra(&[[1, 2, 3, 4]]), 4, true);
         let grown = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
         let damage = Rect { x: 0, y: 0, w: 1, h: 1 };
-        assert_eq!(
-            write(3, 2, 1, Some(damage), &grown, 8),
-            Rect::sized(2, 1)
-        );
-        with(3, |s| assert_eq!(s.pixels, [3, 2, 1, 4, 7, 6, 5, 8])).unwrap();
+        assert_eq!(write(3, 2, 1, Some(&[damage]), &grown, 8, true), vec![Rect::sized(2, 1)]);
+        with(3, |s| assert_eq!(s.pixels, grown)).unwrap();
         remove(3);
     }
 
     #[test]
     fn an_identical_frame_without_damage_reports_nothing_changed() {
         let source = bgra(&[[1, 2, 3, 255], [5, 6, 7, 255]]);
-        write(4, 2, 1, None, &source, 8);
-        assert_eq!(write(4, 2, 1, None, &source, 8), Rect::default());
+        write(4, 2, 1, None, &source, 8, true);
+        assert!(write(4, 2, 1, None, &source, 8, true).is_empty());
         remove(4);
     }
 
     #[test]
-    fn a_present_with_damage_is_trusted_and_skips_the_compare() {
+    fn a_damage_rect_over_identical_pixels_reports_nothing() {
         let source = bgra(&[[1, 2, 3, 255], [5, 6, 7, 255]]);
-        write(5, 2, 1, None, &source, 8);
+        write(5, 2, 1, None, &source, 8, true);
         let damage = Rect { x: 0, y: 0, w: 2, h: 1 };
-        assert_eq!(write(5, 2, 1, Some(damage), &source, 8), damage);
+        assert!(write(5, 2, 1, Some(&[damage]), &source, 8, true).is_empty());
         remove(5);
     }
+
+    #[test]
+    fn a_bounding_dirty_rect_narrows_to_the_pixels_that_changed() {
+        let (w, h) = (4u32, 40u32);
+        let mut first = vec![0u8; (w * h * 4) as usize];
+        for px in first.chunks_exact_mut(4) {
+            px.copy_from_slice(&[9, 9, 9, 255]);
+        }
+        write(6, w, h, None, &first, w as usize * 4, true);
+        let mut second = first.clone();
+        let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
+        second[at(1, 2)..at(1, 2) + 4].copy_from_slice(&[1, 1, 1, 255]);
+        second[at(3, 30)..at(3, 30) + 4].copy_from_slice(&[2, 2, 2, 255]);
+        second[at(2, 31)..at(2, 31) + 4].copy_from_slice(&[3, 3, 3, 255]);
+        let parts = write(6, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4, true);
+        // Far apart down a surface this narrow, one rect covering all three costs 85 blank
+        // pixels, far less than a second image is worth.
+        assert_eq!(parts, vec![Rect { x: 1, y: 2, w: 3, h: 30 }]);
+        remove(6);
+    }
+
+    #[test]
+    fn changes_far_apart_on_a_wide_surface_stay_separate() {
+        let (w, h) = (2000u32, 60u32);
+        let mut first = vec![0u8; (w * h * 4) as usize];
+        for px in first.chunks_exact_mut(4) {
+            px.copy_from_slice(&[9, 9, 9, 255]);
+        }
+        write(7, w, h, None, &first, w as usize * 4, true);
+        let mut second = first.clone();
+        let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
+        second[at(10, 2)..at(10, 2) + 4].copy_from_slice(&[1, 1, 1, 255]);
+        second[at(1900, 50)..at(1900, 50) + 4].copy_from_slice(&[2, 2, 2, 255]);
+        let parts = write(7, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4, true);
+        // Joining these would blank out most of a 1891 by 49 rect, so they travel apart.
+        assert_eq!(
+            parts,
+            vec![Rect { x: 10, y: 2, w: 1, h: 1 }, Rect { x: 1900, y: 50, w: 1, h: 1 }]
+        );
+        remove(7);
+    }
+
 
 }

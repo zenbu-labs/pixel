@@ -214,6 +214,9 @@ pub struct Style {
     pub wrap: bool,
     pub ellipsis: bool,
     pub selectable: Option<bool>,
+    /// Declares that every pixel inside this node is fully opaque once painted, so the
+    /// presenter may layer partial updates over it instead of replacing whole tiles.
+    pub opaque: bool,
     pub selection_color: Option<Color>,
     pub selection_mode: SelectionMode,
 }
@@ -249,6 +252,7 @@ impl Default for Style {
             scrollbar: None,
             wrap: true,
             ellipsis: false,
+            opaque: false,
             selectable: None,
             selection_color: None,
             selection_mode: SelectionMode::default(),

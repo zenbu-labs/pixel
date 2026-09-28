@@ -105,13 +105,17 @@ export function recordSpan(span: TimeSpan) {
   pendingSpans.push(span);
 }
 
+export type DevtoolsTab = "elements" | "console" | "profiler";
+
 export interface DevtoolsState {
   open: boolean;
-  tab: "elements" | "console" | "profiler";
+  tab: DevtoolsTab;
   width: number;
   height: number;
   basePx: number;
   cpuRate: number;
+  highlightTransmits: boolean;
+  maxFps: number;
   background: Rgba | null;
 }
 
@@ -122,5 +126,7 @@ export const devtoolsStore = createStore<DevtoolsState>({
   height: 0,
   basePx: 16,
   cpuRate: 1,
+  highlightTransmits: false,
+  maxFps: 0,
   background: null,
 });

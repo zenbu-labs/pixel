@@ -23,6 +23,8 @@ struct CachedMapping {
 }
 
 static MAPPINGS: Mutex<Vec<CachedMapping>> = Mutex::new(Vec::new());
+static MAP_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MAP_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const MAPPING_CAPACITY: usize = 16;
 const MAPPING_IDLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -40,7 +42,20 @@ fn mapping_for(fd: BorrowedFd<'_>, len: usize) -> Result<Arc<Mapping>, String> {
         entry.last_used = now;
         let map = entry.map.clone();
         cache.push(entry);
+        MAP_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok(map);
+    }
+    // what
+    let misses = MAP_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if misses <= 5 || misses.is_multiple_of(500) {
+        pixel_core::logging::debug(
+            "shm",
+            format!(
+                "mapping a new {} byte frame buffer (dev {dev} ino {ino}); {misses} new so far, {} reused",
+                len,
+                MAP_HITS.load(std::sync::atomic::Ordering::Relaxed)
+            ),
+        );
     }
     let base = unsafe {
         rustix::mm::mmap(
@@ -122,6 +137,7 @@ impl ShmSurface {
         self.on_drop = Some(hook);
     }
 
+    // oh nice so we are not comparing against the canvas, just the surfaces current pixels, thats a nice property
     pub fn pixels(&self) -> &[u8] {
         let len = self.stride * self.height as usize;
         unsafe { std::slice::from_raw_parts(self.map.base.as_ptr(), len) }

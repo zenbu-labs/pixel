@@ -175,6 +175,46 @@ pub fn emit_span(
     });
 }
 
+pub fn thread_cpu_us() -> u64 {
+    if !is_recording() {
+        return 0;
+    }
+    #[cfg(unix)]
+    {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+        unsafe {
+            libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts);
+        }
+        ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
+pub fn process_cpu_us() -> u64 {
+    if !is_recording() {
+        return 0;
+    }
+    #[cfg(unix)]
+    {
+        #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+        let usage = unsafe {
+            let mut usage: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+            usage
+        };
+        let us = |t: libc::timeval| t.tv_sec as u64 * 1_000_000 + t.tv_usec as u64;
+        us(usage.ru_utime) + us(usage.ru_stime)
+    }
+    #[cfg(not(unix))]
+    {
+        0
+    }
+}
+
 pub fn count(name: &'static str, value: u64) {
     ACTIVE.with(|active| {
         if let Some(r) = active.borrow_mut().as_mut() {
@@ -264,12 +304,13 @@ impl Profiler {
     pub fn toggle(&mut self) -> io::Result<Option<std::path::PathBuf>> {
         if is_recording() {
             let data = stop().expect("recording was active");
-            std::fs::create_dir_all("profiles")?;
+            let dir = std::env::var("TERMINAL_BROWSER_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
+            std::fs::create_dir_all(&dir)?;
             let stamp = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .map_err(io::Error::other)?
                 .as_secs();
-            let path = std::path::PathBuf::from(format!("profiles/profile-{stamp}.json"));
+            let path = std::path::PathBuf::from(format!("{dir}/profile-{stamp}.json"));
             std::fs::write(&path, report_json(&data))?;
             Ok(Some(path))
         } else {

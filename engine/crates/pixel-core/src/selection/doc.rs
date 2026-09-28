@@ -85,7 +85,7 @@ impl DocSelectionState {
         } else {
             text.len()
         };
-        (from < to).then(|| from..to)
+        (from < to).then_some(from..to)
     }
 
     pub(crate) fn selected_text(&self, doc: &impl DocLayout) -> Option<String> {

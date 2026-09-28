@@ -96,7 +96,21 @@ const GLOSSARY = {
     "durations and counts are real, start times are not the true instants.",
   counters:
     "Point samples: 'bytes' = escape-sequence bytes written per frame; 'paint.nodes' / " +
-    "'paint.glyphs' = nodes visited / glyphs drawn per paint.",
+    "'paint.glyphs' = nodes visited / glyphs drawn per paint; 'present.patches' = damaged " +
+    "rects sent as separate images that frame, 'present.pixels' = pixels handed to the " +
+    "terminal (the whole frame when a full image went out), 'present.whole_frame' = a frame " +
+    "that fell back to one full image because too much changed or the patch pool was full. " +
+    "Per-stage pixel counts show amplification along the pipeline: 'surface.damage_px' = area " +
+    "of the dirty rects the browser reported, 'surface.changed_px' = area that actually changed " +
+    "after comparing, 'paint.px' = area repainted in the view, 'compose.px' = area copied into " +
+    "the frame, 'present.pixels' = area handed to the terminal. Each should be close to the one " +
+    "before it; a jump marks work done on pixels that did not change. 'present.compactions' " +
+    "= live patches folded into one image, re-sending their union, to free image ids or " +
+    "placements; 'present.absorbed' = a mostly hidden patch deleted as a new one grew over it; " +
+    "'present.tiles' = tiles outside the opaque zones re-sent because their pixels changed. " +
+    "'cpu.frame_thread_us' / 'cpu.frame_process_us' = CPU time the engine thread / the whole " +
+    "process burned during that frame (spans record wall time on one thread and miss worker " +
+    "threads and kernel time); 'cpu.convert_thread_us' = the same for one surface compare.",
   cpuThrottle_note:
     "meta.cpuThrottle > 1 means the engine and JS threads were duty-cycle suspended to " +
     "simulate a CPU that many times slower; durations are inflated accordingly. Throttle " +

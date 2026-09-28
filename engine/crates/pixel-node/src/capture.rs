@@ -398,7 +398,7 @@ impl Segment {
     }
 
     fn remember(&mut self, index: usize) {
-        if index % SNAPSHOT_STRIDE != 0 || self.snapshots.contains_key(&index) {
+        if !index.is_multiple_of(SNAPSHOT_STRIDE) || self.snapshots.contains_key(&index) {
             return;
         }
         self.snapshot_bytes += self.canvas.len();

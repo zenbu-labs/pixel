@@ -480,7 +480,9 @@ mod tests {
 
         let mut canvas = crate::canvas::Canvas::new(4, 2);
         canvas.pixels[..4].copy_from_slice(&[1, 2, 3, 255]);
-        term.draw(&canvas).unwrap();
+        let whole = [crate::surfaces::Rect::sized(canvas.width, canvas.height)];
+        term.draw(crate::canvas::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[] })
+            .unwrap();
         let header = frames.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(header.contains("\"format\":\"bgra\""), "{header}");
         let path = super::super::herdr::tests_support::frame_path(&header);

@@ -1,6 +1,7 @@
 mod capture;
 mod diff;
 mod events;
+#[cfg(target_os = "macos")]
 mod highlight;
 #[cfg(target_os = "macos")]
 mod iosurface;
@@ -155,16 +156,14 @@ impl Autoprofile {
     }
 }
 
-fn draw_frame(
-    engine: &mut Engine,
-    frame: &surface::SurfaceFrame,
-) -> std::result::Result<u32, String> {
+
+fn ingest_frame(engine: &mut Engine, frame: &surface::SurfaceFrame) -> std::result::Result<u32, String> {
     match &frame.pixels {
         #[cfg(target_os = "macos")]
         SurfacePixels::IoSurface(surface) => {
             let locked = surface.lock()?;
             let len = locked.stride * locked.height as usize;
-            draw_pixels(
+            ingest_pixels(
                 engine,
                 frame,
                 locked.width,
@@ -175,7 +174,7 @@ fn draw_frame(
         }
         SurfacePixels::Shm(surface) => {
             let len = surface.stride * surface.height as usize;
-            draw_pixels(
+            ingest_pixels(
                 engine,
                 frame,
                 surface.width,
@@ -184,15 +183,16 @@ fn draw_frame(
                 surface.stride,
             )
         }
+        // owned?
         SurfacePixels::Owned {
             bgra,
             width,
             height,
-        } => draw_pixels(engine, frame, *width, *height, bgra, *width as usize * 4),
+        } => ingest_pixels(engine, frame, *width, *height, bgra, *width as usize * 4),
     }
 }
 
-fn draw_pixels(
+fn ingest_pixels(
     engine: &mut Engine,
     frame: &surface::SurfaceFrame,
     width: u32,
@@ -201,7 +201,7 @@ fn draw_pixels(
     stride: usize,
 ) -> std::result::Result<u32, String> {
     engine
-        .draw_surface(frame.id, width, height, pixels, stride, frame.damage)
+        .ingest_surface(frame.id, width, height, pixels, stride, frame.damage.as_deref())
         .map(|_| height)
         .map_err(|error| error.to_string())
 }
@@ -368,9 +368,6 @@ impl PixelEngine {
         self.info.clone()
     }
 
-    /*
-    this is the function node calls to send data to rust
-     */
     #[napi]
     pub fn apply_ops(&self, ops: String) -> Result<()> {
         let _ = self.tx.send(ops);
@@ -530,6 +527,8 @@ impl PixelEngine {
                 .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
                 .collect();
             let mut autoprofile = Autoprofile::from_env(&mut engine);
+            let (mut seen_carried, mut seen_lost) = (0u64, 0u64);
+            // event loop
             let exit_error = loop {
                 let events = match engine.pump(None) {
                     Ok(events) => events,
@@ -558,19 +557,34 @@ impl PixelEngine {
                         dispatch_to_node.call(Ok(json), ThreadsafeFunctionCallMode::NonBlocking);
                     }
                 }
+                let (carried, lost) = surfaces.dropped();
+                if carried > seen_carried {
+                    engine.note(format!(
+                        "mailbox: {} browser frames dropped, damage carried",
+                        carried - seen_carried
+                    ));
+                    seen_carried = carried;
+                }
+                if lost > seen_lost {
+                    engine.note(format!(
+                        "mailbox: {} browser frames dropped, damage lost",
+                        lost - seen_lost
+                    ));
+                    seen_lost = lost;
+                }
                 let mut surface_error = None;
                 for command in surfaces.take() {
                     match command {
                         SurfaceCommand::Frame(frame) => {
-                            let result = draw_frame(&mut engine, &frame);
+                            // draw frame when we have a surface available? is this polled in a loop?
+                            let result = ingest_frame(&mut engine, &frame);
                             match result {
                                 Ok(rows) => surfaces.recycle(frame, rows),
                                 Err(error) => {
                                     surface_error = Some(error);
                                     break;
                                 }
-                            }
-                        }
+                            } }
                         SurfaceCommand::Remove(id) => {
                             if let Err(error) = engine.delete_surface(id) {
                                 surface_error = Some(error.to_string());
@@ -618,12 +632,19 @@ impl PixelEngine {
     pub fn update_surface_texture(
         &self,
         id: u32,
-        handle: Buffer,
-        damage: Option<DamageRect>,
+        handle: f64,
+        damage_x: u32,
+        damage_y: u32,
+        damage_width: u32,
+        damage_height: u32,
     ) -> Result<()> {
-        let surface =
-            iosurface::RetainedSurface::from_handle(handle.as_ref()).map_err(Error::from_reason)?;
-        let damage = damage.map(DamageRect::into_rect);
+        let surface = iosurface::RetainedSurface::retain(handle as u64 as usize).map_err(Error::from_reason)?;
+        let damage = (damage_width > 0 && damage_height > 0).then_some(pixel_core::surfaces::Rect {
+            x: damage_x,
+            y: damage_y,
+            w: damage_width,
+            h: damage_height,
+        });
         if self.captures.wants(id) {
             let locked = surface.lock().map_err(Error::from_reason)?;
             self.captures.capture(

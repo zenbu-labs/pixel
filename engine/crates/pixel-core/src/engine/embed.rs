@@ -5,7 +5,7 @@ use crate::surfaces::Rect;
 use crate::terminal::{Mouse, MouseKind};
 use crate::tree::PxRect;
 
-fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
+pub(super) fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
     let x1 = (abs.x.max(0.0) as u32 + rect.x).max(visible.x.max(0.0) as u32);
     let y1 = (abs.y.max(0.0) as u32 + rect.y).max(visible.y.max(0.0) as u32);
     let x2 = (abs.x.max(0.0) as u32 + rect.x + rect.w).min((visible.x + visible.w).max(0.0) as u32);
@@ -22,28 +22,40 @@ fn offset(rect: Rect, abs: PxRect, visible: PxRect) -> Rect {
 }
 
 impl Engine {
-    pub fn draw_surface(
+    /// Takes a browser frame into our copy of that surface and records what changed.
+    /// Nothing is painted or sent here.
+    pub fn ingest_surface(
         &mut self,
         surface: u32,
         width: u32,
         height: u32,
         bgra: &[u8],
         stride: usize,
-        damage: Option<Rect>,
+        damage: Option<&[Rect]>,
     ) -> io::Result<usize> {
         let row_bytes = width as usize * 4;
-        if width == 0 || height == 0 || stride < row_bytes || bgra.len() < stride * height as usize
-        {
+        if width == 0 || height == 0 || stride < row_bytes || bgra.len() < stride * height as usize {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "surface dimensions do not match its pixels",
             ));
         }
-        let changed = crate::profiler::span("surface.convert", || {
-            crate::surfaces::write(surface, width, height, damage, bgra, stride)
+        // why are we clamping here?
+        let incoming: u64 = damage.map_or(u64::from(width) * u64::from(height), |rects| {
+            rects.iter().map(|r| r.clamped(width, height).area()).sum()
         });
-        crate::profiler::count("surface.rows", u64::from(changed.h));
-        self.damage_surface_views(surface, changed);
+        crate::profiler::count("surface.damage_px", incoming);
+        let cpu = crate::profiler::thread_cpu_us();
+        // why is this written as a write, but anyways this is where we do the damage comparison
+        let changed = crate::profiler::span("surface.convert", || {
+            crate::surfaces::write(surface, width, height, damage, bgra, stride, self.compare_surfaces)
+        });
+        if cpu > 0 {
+            crate::profiler::count("cpu.convert_thread_us", crate::profiler::thread_cpu_us() - cpu);
+        }
+        crate::profiler::count("surface.rows", changed.iter().map(|r| u64::from(r.h)).sum());
+        crate::profiler::count("surface.changed_px", changed.iter().map(|r| r.area()).sum());
+        self.damage_surface_views(surface, &changed);
         Ok(row_bytes * height as usize)
     }
 
@@ -58,7 +70,7 @@ impl Engine {
         Ok(())
     }
 
-    fn damage_surface_views(&mut self, surface: u32, changed: Rect) {
+    fn damage_surface_views(&mut self, surface: u32, parts: &[Rect]) {
         let size = crate::surfaces::with(surface, |s| (s.width, s.height));
         let Some((surface_w, surface_h)) = size else {
             return;
@@ -66,22 +78,31 @@ impl Engine {
         for view in self.comp.active_views() {
             let view_size = self.comp.views[view].size;
             let tree = &self.comp.views[view].tree;
-            let mut damage = Rect::default();
-            let mut scaled = false;
+            let mut mapped: Vec<Rect> = Vec::new();
+            let mut whole_node = false;
             for (abs, visible) in tree.surface_rects(surface) {
+                // A frame that is not the node's size gets stretched over the whole node when
+                // painted, so every pixel of the node changes, whatever the frame's own damage
+                // says. The node's rect may also be about to change in this frame's layout, so
+                // the tree reports it once layout is current rather than from the rect here.
                 if abs.w.round() as u32 != surface_w || abs.h.round() as u32 != surface_h {
-                    scaled = true;
-                    break;
+                    whole_node = true;
+                    continue;
                 }
-                damage = damage.union(offset(changed, abs, visible));
+                for &part in parts {
+                    let rect = offset(part, abs, visible).clamped(view_size.0, view_size.1);
+                    if !rect.is_empty() {
+                        mapped.push(rect);
+                    }
+                }
             }
-            if scaled {
-                self.comp.views[view].tree.mark_paint();
-                continue;
+            let view = &mut self.comp.views[view];
+            if whole_node {
+                view.tree.mark_surface_changed(surface);
+                view.tree.mark_paint();
             }
-            let damage = damage.clamped(view_size.0, view_size.1);
-            if !damage.is_empty() {
-                self.comp.views[view].damage = self.comp.views[view].damage.union(damage);
+            for rect in mapped {
+                view.add_damage(rect);
             }
         }
     }

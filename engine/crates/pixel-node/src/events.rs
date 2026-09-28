@@ -144,12 +144,15 @@ pub fn event_json(event: &EngineEvent, engine: &Engine, ids: &[IdMap]) -> Option
             view,
             width,
             height,
+            cell,
             base_px,
         } => json!({
             "type": "resize",
             "view": view,
             "width": width,
             "height": height,
+            "cellWidth": cell.0,
+            "cellHeight": cell.1,
             "basePx": base_px,
         }),
         EngineEvent::Colors { colors } => json!({

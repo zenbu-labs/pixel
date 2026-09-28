@@ -1,7 +1,11 @@
+/// Runs `work` over bands of rows on the thread pool when the region is large enough to be
+/// worth the hand-off. `row_pixels` is the width of the region being worked on, not the
+/// stride: a thin tall region is little work however wide its rows are in memory.
 pub fn row_bands<R: Send>(
     dst: &mut [u8],
     dst_stride: usize,
     rows: usize,
+    row_pixels: usize,
     min_pixels: usize,
     work: impl Fn(&mut [u8], usize, usize) -> R + Sync,
     reduce: impl Fn(R, R) -> R,
@@ -11,7 +15,7 @@ pub fn row_bands<R: Send>(
     }
     debug_assert!(dst.len() >= rows * dst_stride);
     let workers = std::thread::available_parallelism().map_or(1, |n| n.get().min(MAX_WORKERS));
-    if rows * dst_stride / 4 < min_pixels || workers < 2 {
+    if rows * row_pixels < min_pixels || workers < 2 {
         return Some(work(dst, 0, rows));
     }
     let band = rows.div_ceil(workers);
@@ -55,6 +59,7 @@ mod tests {
             &mut dst,
             stride,
             rows,
+            stride / 4,
             0,
             |band, first, count| {
                 for r in 0..count {
@@ -72,10 +77,20 @@ mod tests {
     }
 
     #[test]
+    fn a_thin_tall_region_in_a_wide_buffer_stays_on_one_thread() {
+        let stride = 8000;
+        let rows = 900;
+        let mut dst = vec![0u8; rows * stride];
+        let threads = std::sync::Mutex::new(std::collections::HashSet::new());
+        row_bands(&mut dst, stride, rows, 10, 1 << 20, |_, _, count| { threads.lock().unwrap().insert(std::thread::current().id()); count }, |a, b| a + b);
+        assert_eq!(threads.lock().unwrap().len(), 1, "9000 pixels of work is not worth a hand-off");
+    }
+
+    #[test]
     fn small_work_stays_on_one_thread_and_reduces() {
         let stride = 4;
         let mut dst = vec![0u8; 4 * stride];
-        let sum = row_bands(&mut dst, stride, 4, usize::MAX, |_, _, count| count, |a, b| a + b);
+        let sum = row_bands(&mut dst, stride, 4, 1, usize::MAX, |_, _, count| count, |a, b| a + b);
         assert_eq!(sum, Some(4));
     }
 }

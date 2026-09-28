@@ -8,6 +8,11 @@ use crate::text_input::{Mark, caret_width, offset_to_point};
 use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
+mod opaque;
+
+pub use opaque::opaque_areas;
+use opaque::collect_surface_occluders;
+
 #[derive(Default)]
 struct PaintStats {
     rects: f64,
@@ -109,55 +114,7 @@ pub fn paint(
         }
     });
 }
-
-fn collect_surface_occluders(
-    tree: &Tree,
-    id: NodeId,
-    clip: Option<PxRect>,
-    canvas: &mut Canvas,
-    out: &mut Vec<(NodeId, u32)>,
-) {
-    let Some(node) = tree.get(id) else {
-        return;
-    };
-    if node.hidden {
-        return;
-    }
-    let rect = node.abs;
-    if let Some(surface) = node.surface
-        && crate::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
-    {
-        let inset = node.style.corner_radius.iter().fold(1.0f32, |a, &r| a.max(r));
-        let mut area = PxRect {
-            x: rect.x + inset,
-            y: rect.y + inset,
-            w: rect.w - inset * 2.0,
-            h: rect.h - inset * 2.0,
-        };
-        if let Some(clip) = clip {
-            area = area.intersect(clip);
-        }
-        if area.w > 0.0 && area.h > 0.0 {
-            let token = canvas.add_occluder(area.x, area.y, area.w, area.h);
-            out.push((id, token));
-        }
-    }
-    let child_clip = if node.style.overflow != Overflow::Visible {
-        Some(clip.map_or(rect, |c| c.intersect(rect)))
-    } else {
-        clip
-    };
-    for &child in &node.children {
-        let skipped = tree.get(child).is_some_and(|n| {
-            (n.slot.is_some() && !n.slot_visible)
-                || (n.mark.is_some() && !n.mark_visible)
-                || n.shape.is_some()
-        });
-        if !skipped {
-            collect_surface_occluders(tree, child, child_clip, canvas, out);
-        }
-    }
-}
+// ah right, we also have new conditions if opaque vs transparent that ill need to think about
 
 #[allow(clippy::too_many_arguments)]
 fn paint_node(
@@ -193,6 +150,7 @@ fn paint_node(
             stats.rect_count += background.is_some() as u64 + node.style.border.is_some() as u64;
         }
         timed(stats.as_mut().map(|s| &mut s.rects), || {
+            // painting background colors
             match &background {
                 Some(Paint::Solid(bg)) => canvas.fill_rounded_rect(
                     rect.x,
@@ -212,6 +170,7 @@ fn paint_node(
                 ),
                 None => {}
             }
+            // painting borders
             if let Some(border) = node.style.border {
                 match border.uniform() {
                     Some(side) => canvas.stroke_rounded_rect(
@@ -243,6 +202,7 @@ fn paint_node(
             }
         });
     }
+    // painting surfaces
     if let Some(surface) = node.surface {
         if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
             let (_, token) = surface_occluders.swap_remove(at);
@@ -250,19 +210,40 @@ fn paint_node(
         }
         timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {
-                canvas.blit_scaled_rgba_rounded_hint(
-                    rect.x,
-                    rect.y,
-                    rect.w,
-                    rect.h,
-                    &s.pixels,
-                    s.width,
-                    s.height,
-                    node.style.corner_radius,
-                );
+                // scaling? er
+                let unscaled = (rect.w.round().max(0.0) as u32, rect.h.round().max(0.0) as u32)
+                    == (s.width, s.height);
+                    // hint?
+                if unscaled {
+                    canvas.blit_bgra_rounded_hint(
+                        rect.x,
+                        rect.y,
+                        // pixels vs rgba, eh?
+                        &s.pixels,
+                        s.width,
+                        s.height,
+                        node.style.corner_radius,
+                    );
+                } else {
+                    let mut rgba = s.pixels.clone();
+                    for px in rgba.chunks_exact_mut(4) {
+                        px.swap(0, 2);
+                    }
+                    canvas.blit_scaled_rgba_rounded(
+                        rect.x,
+                        rect.y,
+                        rect.w,
+                        rect.h,
+                        &rgba,
+                        s.width,
+                        s.height,
+                        node.style.corner_radius,
+                    );
+                }
             });
         });
     }
+    // painting images
     if let Some(image) = &node.image {
         timed(stats.as_mut().map(|s| &mut s.images), || {
             match crate::image_cache::status(&image.src, &image.equal_to) {
@@ -297,6 +278,7 @@ fn paint_node(
         && (background.is_some() || node.style.border.is_some())
     {
         timed(stats.as_mut().map(|s| &mut s.selection), || {
+            // wait, whats a band?
             fill_bands(canvas, bands, visible, color);
         });
     }
@@ -317,6 +299,7 @@ fn paint_node(
         .or(enclosing_block);
     let in_block = enclosing_block.is_some();
 
+    // painting text
     if let Some(text) = &node.text {
         let px = node.resolved.px;
         let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
@@ -583,6 +566,7 @@ fn paint_node(
         }
     }
 
+    // recursively applying to children
     for &child in &node.children {
         if tree.get(child).is_some_and(|n| {
             (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)

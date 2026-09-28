@@ -16,7 +16,8 @@ const DIRECTION_CODES: Record<Direction, string> = {
   up: "GSup",
 };
 
-const GHOSTTY_BINARY = /\/Ghostty\.app\/Contents\/MacOS\/ghostty(\s|$)/;
+// Forks such as Forky ship the same ghostty binary inside their own .app bundle.
+const GHOSTTY_BINARY = /\.app\/Contents\/MacOS\/ghostty(\s|$)/;
 
 interface Process {
   parent: number;

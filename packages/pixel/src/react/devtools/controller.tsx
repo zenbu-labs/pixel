@@ -148,6 +148,16 @@ export function setCpuThrottle(rate: number) {
   engineOp({ op: "setCpuThrottle", rate });
 }
 
+export function setMaxFps(fps: number) {
+  devtoolsStore.update((s) => ({ ...s, maxFps: fps }));
+  engineOp({ op: "setRender", maxFps: fps });
+}
+
+export function setHighlightTransmits(on: boolean) {
+  devtoolsStore.update((s) => ({ ...s, highlightTransmits: on }));
+  engineOp({ op: "setRender", highlightTransmits: on });
+}
+
 export function requestLayout() {
   const b = devtoolsBridge();
   b.push(APP_VIEW, { op: "queryLayout" });

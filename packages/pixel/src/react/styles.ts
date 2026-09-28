@@ -73,6 +73,7 @@ export interface Style {
   font?: number;
   hoverBackground?: Color;
   hoverColor?: Color;
+  opaque?: boolean;
   scrollbar?: ScrollbarStyle;
   wrap?: boolean;
   ellipsis?: boolean;
@@ -155,6 +156,7 @@ export function serializeStyle(style: Style): Record<string, unknown> {
     wrap: style.wrap,
     ellipsis: style.ellipsis,
     selectable: style.selectable,
+    opaque: style.opaque,
     selectionColor: parseColor(style.selectionColor),
     selectionMode: style.selectionMode,
     scrollbar: style.scrollbar && {
