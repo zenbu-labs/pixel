@@ -59,7 +59,6 @@ pub(super) fn tiles_for(frame: (u32, u32), opaque: &[Rect]) -> Vec<Tile> {
 
 pub(super) fn mark_dirty(tiles: &mut [Tile], damage: &[Rect]) {
     for tile in tiles {
-        // that seems fine tbh
         if damage.iter().any(|d| d.intersects(tile.rect)) {
             tile.dirty = true;
         }

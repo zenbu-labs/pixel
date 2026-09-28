@@ -626,8 +626,6 @@ impl Terminal {
             crate::logging::info("terminal", format!("frame transport forced to {forced:?}"));
             return Ok(forced);
         }
-        // Shared memory first: a temp file costs the same two copies through the page cache,
-        // but only shared memory says out loud that the disk is never involved.
         if self.probe_shared_memory()? {
             crate::logging::info("terminal", "frames go through shared memory");
             return Ok(FrameTransport::Shared);
@@ -796,7 +794,6 @@ impl Terminal {
         drawn
     }
 
-    /// The terminal's cell size, or a common one until the terminal has told us.
     pub(crate) fn cell(&self) -> (u32, u32) {
         let (cw, ch) = self.cell.unwrap_or(DEFAULT_CELL);
         (cw.max(1), ch.max(1))
@@ -2932,18 +2929,12 @@ mod tty_tests {
         fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
     }
 
-    /// Terminal teardown drains the tty output queue (tcsetattr TCSAFLUSH),
-    /// which only empties when the master side reads — a real terminal always
-    /// does, the test must too or Drop blocks forever.
     fn fake_terminal_answering_1016(
         master: &std::fs::File,
         mode_1016: Option<&'static [u8]>,
     ) -> std::thread::JoinHandle<()> {
         let mut master = master.try_clone().unwrap();
         std::thread::spawn(move || {
-            // Plays the terminal on the pty's other end: it speaks the kitty keyboard protocol,
-            // turns every other probe down at once so open never waits out a timeout, and
-            // answers a status report with one click in whichever mouse format is on.
             let mut seen = Vec::new();
             let mut pixels = false;
             let mut byte = [0u8; 1];
@@ -2980,8 +2971,6 @@ mod tty_tests {
         })
     }
 
-    // A graphics query gets ENOENT and a frame edit EINVAL, as from a terminal
-    // without either; every other graphics command goes unanswered.
     fn graphics_error(seen: &[u8]) -> Option<Vec<u8>> {
         let start = seen.windows(3).rposition(|w| w == b"\x1b_G")? + 3;
         let control = seen[start..].split(|&b| b == b';').next()?;

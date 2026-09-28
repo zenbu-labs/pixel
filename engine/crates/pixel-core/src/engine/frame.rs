@@ -1,6 +1,3 @@
-//! One frame: paint the views that changed, compose them, hand the result to the terminal,
-//! paced by the frame cap and, when pixels ride the terminal connection, the byte budget.
-
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -11,22 +8,15 @@ use crate::logging;
 use crate::paint::paint;
 use crate::surfaces::Rect;
 
-/// Both are overridden by the host through `set_max_fps` and `set_frame_budget_mbps`; the
-/// budget only matters when frames travel inline over the terminal connection.
 pub(super) const DEFAULT_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
 pub(super) const DEFAULT_MAX_FPS: f32 = 0.0;
 
 impl Engine {
-    /// Caps how often frames go to the terminal. 0 means uncapped. Producers like a
-    /// browser on a 120 Hz display paint faster than the terminal can usefully show, and
-    /// every frame costs fixed work on both sides, so damage waits for the next slot.
     pub fn set_max_fps(&mut self, fps: f32) {
         self.max_fps = fps.max(0.0);
         logging::info("engine", format!("max fps {}", if self.max_fps > 0.0 { self.max_fps.to_string() } else { "uncapped".to_string() }));
     }
 
-    /// Draws what the presenter is doing on top of the frame: a note whenever it folds
-    /// patches or sends a whole frame, and a status line with what the terminal is holding.
     pub fn set_frame_events(&mut self, on: bool) {
         if on {
             self.term.set_overlay_font(self.fonts[0].clone());
@@ -36,7 +26,6 @@ impl Engine {
         logging::info("engine", if on { "showing presenter events on screen" } else { "presenter events hidden" });
     }
 
-    /// Shows a line on the debug overlay, for things the host notices that the engine cannot.
     pub fn note(&mut self, text: String) {
         self.term.note(text);
     }
@@ -49,8 +38,6 @@ impl Engine {
         );
     }
 
-    /// Caps pixel bytes per second when frames ride the terminal connection inline (ssh,
-    /// tmux passthrough). 0 lifts the cap.
     pub fn set_frame_budget_mbps(&mut self, mbps: f32) {
         self.frame_budget_bytes_per_sec = mbps.max(0.0) * 1_000_000.0;
         logging::info("engine", format!("inline frame budget {mbps} MB/s"));
@@ -76,10 +63,7 @@ impl Engine {
         self.comp.dirty
             || self.comp.active_views().iter().any(|&i| {
                 let view = &self.comp.views[i];
-                // oh right, i almost completely forgot the concept of a view
-                // wait, how is damage an old concept on views, er
                 view.tree.dirty()
-                // ah use it here at least as a conditional nice
                     || !view.damage_parts.is_empty()
                     || (view.canvas.width, view.canvas.height) != view.size
             })

@@ -30,7 +30,6 @@ export class Surface {
     if ("ioSurface" in frame) {
       const submit = this.engine.updateSurfaceTexture;
       if (!submit) throw new Error("IOSurface frames are not supported on this platform");
-      // The handle is a little-endian pointer; user-space addresses fit in 48 bits.
       const address = frame.ioSurface.readUIntLE(0, 6);
       const d = frame.damage;
       submit.call(this.engine, this.id, address, d?.x ?? 0, d?.y ?? 0, d?.width ?? 0, d?.height ?? 0);

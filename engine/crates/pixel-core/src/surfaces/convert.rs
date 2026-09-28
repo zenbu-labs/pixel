@@ -1,9 +1,6 @@
 use super::{Rect, RowChange};
 
-/// Copies of whole surfaces (resizes) are the only compares worth spreading over threads;
-/// per-paint compares are memory bound, and extra threads only add wake-ups and yields.
 const PARALLEL_MIN_PIXELS: usize = 4 << 20;
-
 
 
 pub(super) fn region(
@@ -37,13 +34,6 @@ pub(super) fn region(
 }
 
 
-/*
-
-can i answer a question if the region compares only over the damage region
-
-also wherei sthe original its comparing against? that's a question i was interested about
-
-*/
 pub(super) fn region_tight(
     dst: &mut [u8],
     dst_width: u32,
@@ -80,7 +70,6 @@ fn row_diff(source: &[u8], target: &mut [u8]) -> Option<(u32, u32)> {
     Some((first as u32, last as u32 + 1))
 }
 
-// now what is going on here?
 const SCAN_BLOCK: usize = 64;
 
 fn first_mismatch(a: &[u8], b: &[u8]) -> usize {
@@ -93,7 +82,6 @@ fn first_mismatch(a: &[u8], b: &[u8]) -> usize {
     start + (start..a.len()).position(|i| a[i] != b[i]).expect("slices differ")
 }
 
-/// Index of the last differing byte; the caller guarantees the slices differ.
 fn last_mismatch(a: &[u8], b: &[u8]) -> usize {
     let blocks = a.len() / SCAN_BLOCK;
     let tail = blocks * SCAN_BLOCK;

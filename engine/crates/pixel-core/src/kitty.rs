@@ -159,8 +159,6 @@ pub(crate) fn kitty_transmit_placed(transmit: Transmit, rgba: &[u8], wrapper: Wr
     out
 }
 
-/// A rectangle of an image's first frame to replace in place (kitty animation protocol:
-/// `a=f` with `r=1` edits the root frame, `X=1` copies instead of alpha blending).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FrameEdit {
     pub image_id: u32,

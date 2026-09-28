@@ -10,8 +10,6 @@ export function hostDisplayScale(terminal: Terminal | null, env: NodeJS.ProcessE
   return screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).scaleFactor;
 }
 
-// A terminal font zoom grows the cells while the pane keeps its pixel size, so it fits fewer
-// rows. When the row count holds, the whole display scaled and the page should not zoom.
 export class CellZoomFollower {
   private last: { rows: number; basePx: number } | null = null;
 

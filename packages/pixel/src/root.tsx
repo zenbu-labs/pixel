@@ -387,8 +387,7 @@ export function createRoot(options: RootOptions = {}): Root {
       shutdown(code);
     },
   };
-  // Frames above the display's refresh rate cannot be shown, so that is the cap the engine
-  // starts with. The profiler's fps field overrides it.
+
   try {
     const hz = screen.getPrimaryDisplay().displayFrequency;
     if (hz > 0) engineRoot.setRender({ maxFps: hz });

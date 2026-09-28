@@ -314,8 +314,6 @@ pub struct Engine {
     highlight: Option<(usize, NodeId, HighlightArea)>,
     hover_target: Option<(usize, NodeId)>,
     emit_logs: bool,
-    /// Whether browser frames are compared against the previous one to find what changed,
-    /// or the browser's dirty rect is taken as is.
     pub compare_surfaces: bool,
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
@@ -344,7 +342,6 @@ pub struct Engine {
     next_pasted_mark: u64,
     pending: Vec<EngineEvent>,
     awaiting_cell: Option<(crate::terminal::WindowSize, Instant)>,
-    /// Whether `cell` came from the terminal or a host rather than from dividing pixels by cells.
     cell_exact: bool,
     color_request_at: Option<Instant>,
     last_color_request: Option<Instant>,
@@ -358,7 +355,6 @@ pub struct Engine {
     pub stats: FrameStats,
 }
 
-// color?
 const COLOR_SETTLE_DELAY: Duration = Duration::from_millis(50);
 const COLOR_REQUEST_INTERVAL: Duration = Duration::from_secs(1);
 const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
@@ -657,7 +653,6 @@ impl Engine {
             self.focus_click.as_ref().map(|(deadline, _)| *deadline),
             self.color_request_at,
             self.awaiting_cell.as_ref().map(|(_, at)| *at),
-            // what?
             self.term.idle_flatten_at(),
             self.term.overlay_due(),
         ];
@@ -828,8 +823,6 @@ impl Engine {
         Ok(())
     }
 
-    /// A report whose pixel size hints at a new cell size waits for the terminal's exact
-    /// answer, so the layout never passes through a guessed cell on the way.
     fn apply_window(&mut self, ws: &crate::terminal::WindowSize, source: &str) -> io::Result<()> {
         let estimate = ws.cell_size();
         if estimate != self.cell_estimate {

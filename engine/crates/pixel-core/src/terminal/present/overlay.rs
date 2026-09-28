@@ -11,7 +11,7 @@ use crate::wrapper::Wrapper;
 const FIRST_NOTE_ID: u32 = 20_000;
 const STATUS_ID: u32 = 20_100;
 const MAX_NOTES: usize = 6;
-/// Above the transmit outlines, which are themselves above every frame image.
+// overflow protection
 const Z: i32 = (1 << 30) + 1;
 const NOTE_LIFETIME: Duration = Duration::from_millis(1600);
 const MARGIN: u32 = 8;

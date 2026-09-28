@@ -1,6 +1,3 @@
-/// Runs `work` over bands of rows on the thread pool when the region is large enough to be
-/// worth the hand-off. `row_pixels` is the width of the region being worked on, not the
-/// stride: a thin tall region is little work however wide its rows are in memory.
 pub fn row_bands<R: Send>(
     dst: &mut [u8],
     dst_stride: usize,

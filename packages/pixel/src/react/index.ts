@@ -189,14 +189,7 @@ export interface RootOptions {
   sessionEnv?: NodeJS.ProcessEnv;
 }
 
-/**
- * Knobs for how frames reach the terminal. `maxFps` caps frames per second (0 lifts the cap).
- * `frameBudgetMbps` caps pixel megabytes per second when frames travel inline over the terminal
- * connection (0 lifts the cap). `highlightTransmits` draws a border around every image sent.
- * `compareFrames` compares each browser frame with the previous one to send only pixels that
- * changed; off trusts the browser's dirty rect and sends all of it. `frameEvents` draws a note
- * on screen whenever the presenter folds patches or sends a whole frame, plus a status line.
- */
+
 export interface RenderSettings {
   maxFps?: number;
   frameBudgetMbps?: number;

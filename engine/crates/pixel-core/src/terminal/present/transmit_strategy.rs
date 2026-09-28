@@ -129,7 +129,6 @@ pub(crate) struct Stats {
     patches: u64,
     pixels: u64,
     full_pixels: u64,
-    /// Which side asked for each draw: the UI tree repainting, or a surface's own damage.
     repaints: u64,
     surface_draws: u64,
 }

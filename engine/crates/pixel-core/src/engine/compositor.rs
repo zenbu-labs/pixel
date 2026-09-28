@@ -17,9 +17,7 @@ pub struct View {
     pub clear_color: Color,
     pub origin_x: u32,
     pub size: (u32, u32),
-    /// Rects a surface reported changed since the view last painted, in view pixels.
     pub damage_parts: Vec<Rect>,
-    /// Surface areas nothing was painted over in the last paint, in view pixels.
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
 }
@@ -38,7 +36,6 @@ impl View {
         }
     }
 
-    // damage parts relevant
     pub(crate) fn add_damage(&mut self, rect: Rect) {
         self.damage_parts.push(rect);
     }
@@ -56,13 +53,10 @@ pub struct Compositor {
     pub divider_drag: bool,
     pub split: Option<f32>,
     pub relayout: bool,
-    // where do u come from?  surface areas? wut
-    /// Frame-space surface areas nothing was painted over this frame.
     pub opaque: Vec<crate::surfaces::OpaqueArea>,
     pub ui_over_surfaces: Vec<Rect>,
     changed: Vec<Rect>,
     repainted: Vec<Rect>,
-    /// The lone full-window view whose own canvas is the frame this draw, if any.
     direct: Option<usize>,
     panes: [usize; 2],
     divider_hover: bool,
@@ -79,7 +73,6 @@ impl Compositor {
             divider_drag: false,
             split: None,
             relayout: true,
-            // okay we make u at the least
             opaque: Vec::new(),
             ui_over_surfaces: Vec::new(),
             changed: Vec::new(),
@@ -200,16 +193,11 @@ impl Compositor {
         self.apply_layout(false)
     }
 
-    /// Blits the painted view regions into the persistent frame and records what changed,
-    /// ready for `frame()`. `direct` allows a lone full-window view to skip the blit and
-    /// be drawn from its own canvas.
     pub(crate) fn compose(&mut self, painted: &[Painted], whole_frame: bool, direct: bool) {
         let resized = (self.frame.width, self.frame.height) != self.window;
         if resized {
             self.frame = Canvas::new(self.window.0, self.window.1);
         }
-        // A view repainting whole still reports its own rectangle as damage; only a resize,
-        // a relayout, or engine overlays leave the presenter with no rects to trust.
         let everything = resized || whole_frame || std::mem::take(&mut self.relayout);
         let active = self.active_views();
         let alone = active.len() == 1
@@ -261,15 +249,12 @@ impl Compositor {
         self.changed.extend(divider);
     }
 
-    /// What the terminal should draw: a lone full-window view's own canvas, or the composed
-    /// frame, with everything the last `compose` learned about it.
     pub(crate) fn frame(&self) -> crate::canvas::Frame<'_> {
         crate::canvas::Frame {
             canvas: self.direct.map_or(&self.frame, |view| &self.views[view].canvas),
             premultiplied: self.direct.is_some(),
             changed: &self.changed,
             repainted: &self.repainted,
-            // opauqe, i see u pussy
             opaque: &self.opaque,
             ui_over_surfaces: &self.ui_over_surfaces,
         }
@@ -278,16 +263,11 @@ impl Compositor {
     fn collect_opaque(&mut self) {
         self.opaque.clear();
         self.ui_over_surfaces.clear();
-        // so we loop over active views
         for view in self.active_views() {
-            // we compute the origin of the current view
             let origin = self.views[view].origin_x;
-            // views has an opauae vec? ug
             for area in &self.views[view].opaque {
-                // and then it just pushes it with some computation that doesn't seem important, we move on to tracing how opaaue gets onto the view
                 let moved = Rect { x: area.rect.x + origin, ..area.rect }.clamped(self.frame.width, self.frame.height);
                 if !moved.is_empty() {
-                    /// oh someone is doing something
                     self.opaque.push(crate::surfaces::OpaqueArea { surface: area.surface, rect: moved });
                 }
             }
@@ -335,16 +315,10 @@ impl Compositor {
     }
 }
 
-// what
-/// One view's repaint this frame. `whole` marks a repaint of the React tree, which has no
-/// damage rects; the frame then goes out whole instead of being diffed into patches.
 pub(crate) struct Painted {
     pub view: usize,
-    /// The regions painted this frame, also the clip the painter used.
     pub parts: Vec<Rect>,
     pub whole: bool,
-    /// Embedded surface rects that changed, kept apart when the whole view repainted so
-    /// the presenter still knows those pixels are new.
     pub surface_parts: Vec<Rect>,
 }
 

@@ -137,7 +137,6 @@ impl ShmSurface {
         self.on_drop = Some(hook);
     }
 
-    // oh nice so we are not comparing against the canvas, just the surfaces current pixels, thats a nice property
     pub fn pixels(&self) -> &[u8] {
         let len = self.stride * self.height as usize;
         unsafe { std::slice::from_raw_parts(self.map.base.as_ptr(), len) }
@@ -151,7 +150,6 @@ mod tests {
     use std::io::Write;
     use std::os::fd::AsRawFd;
 
-    // A plain file maps the same way a shm region does, and exists on every platform.
     fn region(bytes: &[u8]) -> File {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(

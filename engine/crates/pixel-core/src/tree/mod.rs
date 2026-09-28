@@ -291,10 +291,6 @@ pub struct Tree {
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
-    /// Surfaces whose every pixel on screen changed since the last paint without the browser
-    /// saying so: a node started showing them, a node showing them moved or resized, or a
-    /// frame arrived at a size other than the node's. The frame loop reports their rects as
-    /// changed once layout is current.
     changed_surfaces: Vec<u32>,
 }
 

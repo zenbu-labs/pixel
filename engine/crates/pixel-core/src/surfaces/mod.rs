@@ -5,10 +5,6 @@ use std::collections::HashMap;
 
 mod convert;
 
-/// A frame area whose pixels are fully opaque. `surface` says whose pixels they are: a
-/// webview's, whose own damage says exactly what changed there, or `None` for an opaque UI
-/// node, whose pixels change through repaints and have to be compared. If the surface at a
-/// rect changes, every pixel there changed even though no damage said so.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OpaqueArea {
     pub surface: Option<u32>,
@@ -90,26 +86,14 @@ pub struct RowChange {
     pub x1: u32,
 }
 
-/// Joining two rects is worth it while the blank pixels it adds cost less than the image it
-/// saves. This is what one image is worth to ghostty, measured in pixels of upload, and
-/// every place that joins damage rects uses it. Measured 2026-09-24 against the bench
-/// fixtures: 30k beats 3k by 25% on scrolling text and 4 to 10% on canvas, caret and hover,
-/// costs 1 to 6% on scattered small changes, and nothing improves past 30k.
+// https://github.com/zenbu-labs/pixel/pull/18
 pub const IMAGE_OVERHEAD_PX: u64 = 30_000;
-/// A ceiling on runaway growth, not a preference: every rect is a full paint pass of its
-/// own, and the presenter joins further on its own terms when it must. The pass per rect is
-/// only there in case something is drawn over the surface; inside an opaque zone a straight
-/// blit would do, and painting that way would make this ceiling mostly moot.
 const MAX_CHANGED_RECTS: usize = 32;
 
 /// Blank pixels a rect covering both would add over keeping them apart.
 fn wasted(a: Rect, b: Rect) -> u64 {
     a.union(b).area().saturating_sub(a.area() + b.area())
 }
-
-/// The one rule for joining damage rects. Walks them in the order given and extends the rect
-/// in hand while doing so wastes fewer pixels than an extra image would cost, so callers hand
-/// over rects in scan order: top to bottom, left to right.
 pub fn group_rects(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
     let mut out: Vec<Rect> = Vec::new();
     for rect in rects {
@@ -125,14 +109,10 @@ pub fn group_rects(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
     out
 }
 
-/// Turns the rows a compare found different into rects, one band per row, joined by
-/// `group_rects`.
 pub fn rects_from_rows(changes: Vec<RowChange>) -> Vec<Rect> {
     group_rects(changes.into_iter().map(|c| Rect { x: c.x0, y: c.y, w: c.x1 - c.x0, h: 1 }))
 }
 
-/// A browser's latest pixels, kept in the BGRA order Chromium delivers so incoming frames
-/// compare as raw bytes. Painting swizzles to RGBA for only the pixels it draws.
 pub struct Surface {
     pub width: u32,
     pub height: u32,
@@ -183,12 +163,10 @@ pub fn write(
             if compare {
                 changed.extend(convert::region_tight(&mut surface.pixels, width, bgra, stride, region));
             } else {
-                // Taking the browser's rect at its word: copy it whole and report all of it.
                 convert::region(&mut surface.pixels, width, bgra, stride, region);
                 changed.push(region);
             }
         }
-        // eh?
         if changed.is_empty() {
             crate::profiler::count("surface.unchanged", || 1);
         }
