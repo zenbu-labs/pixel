@@ -16,13 +16,6 @@ mod transmit_strategy;
 mod screen;
 mod tiles;
 
-#[cfg(test)]
-mod harness;
-#[cfg(test)]
-mod scenarios;
-#[cfg(test)]
-mod sim;
-
 pub(crate) use flash::Flashes;
 pub(crate) use animation::Animation;
 pub(crate) use overlay::Overlay;

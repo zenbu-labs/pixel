@@ -247,11 +247,11 @@ pub(crate) fn kitty_delete(image_id: u32, wrapper: Wrapper) -> Vec<u8> {
     }
 }
 
-pub(crate) const PLACEHOLDER: char = '\u{10EEEE}';
+const PLACEHOLDER: char = '\u{10EEEE}';
 
 /// diacritics that encode row/column indices on placeholder cells, from
 /// https://sw.kovidgoyal.net/kitty/_downloads/f0a0de9ec8d9ff4456206db8e0814937/rowcolumn-diacritics.txt
-pub(crate) const ROW_COLUMN_DIACRITICS: [char; 297] = [
+const ROW_COLUMN_DIACRITICS: [char; 297] = [
     '\u{0305}', '\u{030D}', '\u{030E}', '\u{0310}', '\u{0312}', '\u{033D}', '\u{033E}', '\u{033F}', '\u{0346}', '\u{034A}',
     '\u{034B}', '\u{034C}', '\u{0350}', '\u{0351}', '\u{0352}', '\u{0357}', '\u{035B}', '\u{0363}', '\u{0364}', '\u{0365}',
     '\u{0366}', '\u{0367}', '\u{0368}', '\u{0369}', '\u{036A}', '\u{036B}', '\u{036C}', '\u{036D}', '\u{036E}', '\u{036F}',

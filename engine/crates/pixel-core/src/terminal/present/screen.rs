@@ -20,26 +20,6 @@ impl Patched {
         self.shown.extend_from_slice(&canvas.pixels);
     }
 
-    pub(super) fn dump_screen_if_requested(&self, canvas: &Canvas) {
-        let Some(base) = &self.dump else { return };
-        let request = format!("{base}.request");
-        if std::fs::metadata(&request).is_err() {
-            return;
-        }
-        let mut live = String::new();
-        for patch in &self.live {
-            live.push_str(&format!("{} {} {} {} {} {}\n", patch.id, patch.rect.x, patch.rect.y, patch.rect.w, patch.rect.h, patch.z));
-        }
-        let _ = std::fs::write(format!("{base}.live"), live);
-        for (suffix, pixels) in [(".shown", &self.shown), (".canvas", &canvas.pixels)] {
-            let mut out = Vec::with_capacity(8 + pixels.len());
-            out.extend_from_slice(&canvas.width.to_le_bytes());
-            out.extend_from_slice(&canvas.height.to_le_bytes());
-            out.extend_from_slice(pixels);
-            let _ = std::fs::write(format!("{base}{suffix}"), out);
-        }
-    }
-
     fn screen_valid(&self, canvas: &Canvas) -> bool {
         self.shown.len() == canvas.pixels.len() && self.base == Some((canvas.width, canvas.height))
     }

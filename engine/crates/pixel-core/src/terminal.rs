@@ -528,7 +528,6 @@ impl Terminal {
         terminal.transport = terminal.probe_transport(&env)?;
         terminal.identity = terminal.probe_identity(&env)?;
         terminal.present = terminal.choose_present(&env)?;
-        terminal.patches.configure(&env);
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;

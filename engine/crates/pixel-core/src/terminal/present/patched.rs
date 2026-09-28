@@ -16,11 +16,10 @@ pub(crate) struct Patched {
     pub(super) opaque: Vec<crate::surfaces::OpaqueArea>,
     pub(super) opaque_shape_changed: bool,
     pub(super) ui_over_surfaces: Vec<Rect>,
-    pub(in crate::terminal) tiles: Vec<Tile>,
+    pub(super) tiles: Vec<Tile>,
     pub(super) last_draw: Option<std::time::Instant>,
     pub(super) last_flatten: Option<std::time::Instant>,
     pub(super) stats: Stats,
-    pub(super) dump: Option<String>,
 }
 
 const IDLE_FLATTEN_AFTER: std::time::Duration = std::time::Duration::from_millis(400);
@@ -29,10 +28,6 @@ const IDLE_COMPACT_KEEP: usize = 12;
 const IDLE_COMPACT_MAX_UNION_PX: u64 = 400 * 400;
 
 impl Patched {
-    pub(in crate::terminal) fn configure(&mut self, env: &super::SessionEnv) {
-        self.dump = env.var("TERMINAL_BROWSER_SCREEN_DUMP");
-    }
-
     pub(super) fn opaque_rects(&self) -> Vec<Rect> {
         self.opaque.iter().map(|area| area.rect).collect()
     }
@@ -146,7 +141,6 @@ impl Terminal {
         let status = self.patches.stats.line(self.patches.live.len(), self.patches.tiles.len());
         self.set_status(status);
         self.append_overlay(out)?;
-        self.patches.dump_screen_if_requested(canvas);
         Ok(written)
     }
 
