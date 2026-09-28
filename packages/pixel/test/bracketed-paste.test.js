@@ -3,11 +3,8 @@ const { test } = require("node:test");
 
 const { bracketedPaste } = require("../dist/terminal/shared.js");
 
-test("single-line text is passed through untouched", () => {
+test("only multi-line text is wrapped in a bracketed paste", () => {
   assert.equal(bracketedPaste("> hello; rm -rf /"), "> hello; rm -rf /");
-});
-
-test("multi-line text is wrapped in one bracketed paste", () => {
   assert.equal(bracketedPaste("a\nb\n\n"), "\x1b[200~a\nb\n\n\x1b[201~");
 });
 

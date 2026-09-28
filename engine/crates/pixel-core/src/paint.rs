@@ -821,13 +821,10 @@ mod tests {
     }
 
     #[test]
-    fn no_spans_yields_the_whole_line_in_the_fallback_color() {
+    fn spans_split_a_line_with_fallback_gaps() {
         let out = split_by_spans(0..10, &[], FALLBACK);
         assert_eq!(colors(&out), vec![(0..10, FALLBACK)]);
-    }
 
-    #[test]
-    fn spans_split_a_line_with_fallback_gaps() {
         let out = split_by_spans(0..10, &[span(2, 4), span(6, 8)], FALLBACK);
         assert_eq!(
             colors(&out),
@@ -860,30 +857,13 @@ mod tests {
     }
 
     #[test]
-    fn styled_spans_carry_their_flags_through_the_split() {
-        let styled = TextSpan {
-            bold: true,
-            italic: true,
-            underline: true,
-            ..span(2, 4)
-        };
-        let out = split_by_spans(0..6, &[styled], FALLBACK);
-        assert_eq!(out.len(), 3);
-        assert!(!out[0].1.bold && !out[0].1.italic);
-        assert_eq!(out[1].0, 2..4);
-        assert!(out[1].1.bold && out[1].1.italic && out[1].1.underline);
-        assert!(!out[2].1.bold && !out[2].1.underline);
-    }
-
-    #[test]
     fn image_nodes_measure_to_aspect_size_and_paint_pixels() {
         let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
-        let dir = std::env::temp_dir().join("pixel-paint-image-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("solid.png");
-        image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 200, 0, 255]))
-            .save(&path)
-            .unwrap();
+        let src = "mem://paint-solid";
+        crate::image_cache::insert_decoded(
+            src.into(),
+            &image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 200, 0, 255])),
+        );
 
         let mut tree = Tree::new((100.0, 100.0));
         tree.reconcile(Desc {
@@ -897,7 +877,7 @@ mod tests {
                     ..Style::default()
                 },
                 image: Some(crate::tree::ImageProps {
-                    src: path.to_string_lossy().to_string(),
+                    src: src.into(),
                     equal_to: Vec::new(),
                 }),
                 ..Desc::default()
@@ -907,24 +887,7 @@ mod tests {
         tree.flush_layout(std::slice::from_ref(&font), 16.0);
         let node = tree.children(tree.root())[0];
         let rect = tree.rect(node).unwrap();
-        assert_eq!(
-            rect.h, 0.0,
-            "without a placeholder the image occupies nothing until decoded"
-        );
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !crate::image_cache::drain_completed().landed {
-            assert!(std::time::Instant::now() < deadline, "decode never landed");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        tree.mark_layout();
-        tree.flush_layout(std::slice::from_ref(&font), 16.0);
-        let rect = tree.rect(node).unwrap();
-        assert_eq!(
-            (rect.w, rect.h),
-            (40.0, 20.0),
-            "height follows aspect once the pixels are ready"
-        );
+        assert_eq!((rect.w, rect.h), (40.0, 20.0), "height follows the pixel aspect");
         let mut canvas = Canvas::new(100, 100);
         paint(&tree, &mut canvas, std::slice::from_ref(&font), None, None);
         let center = &canvas.pixels[((10 * 100 + 20) * 4) as usize..][..4];

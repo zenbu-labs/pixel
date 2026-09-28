@@ -313,7 +313,7 @@ mod tests {
     }
 
     #[test]
-    fn a_scroll_line_carries_the_cursor_when_the_helper_sends_it() {
+    fn a_scroll_line_carries_the_cursor_and_precision_only_when_the_helper_sends_them() {
         let NativeEvent::Scroll {
             delta_y,
             delta_x,
@@ -328,10 +328,7 @@ mod tests {
         assert_eq!((delta_y, delta_x), (3.5, -2.0));
         assert_eq!((phase, precise), (1, true));
         assert_eq!(point, Some((400.5, 350.25)));
-    }
 
-    #[test]
-    fn a_scroll_line_without_a_cursor_still_parses() {
         let NativeEvent::Scroll { delta_y, delta_x, point, .. } = scroll("s 3.5 1 0 1") else {
             panic!("expected a scroll")
         };
@@ -341,14 +338,11 @@ mod tests {
             panic!("expected a scroll")
         };
         assert_eq!((delta_x, point), (-2.0, None));
-    }
 
-    #[test]
-    fn imprecise_is_anything_but_one() {
         let NativeEvent::Scroll { precise, .. } = scroll("s 5 0 0 0") else {
             panic!("expected a scroll")
         };
-        assert!(!precise);
+        assert!(!precise, "imprecise is anything but one");
     }
 
     #[test]

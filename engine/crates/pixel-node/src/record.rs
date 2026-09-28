@@ -1030,7 +1030,7 @@ mod tests {
 
         let font = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../assets/fonts/JetBrainsMono-Regular.ttf"
+            "/../../assets/fonts/JetBrainsMono-Regular.ttf"
         );
         let video = dir.join("video.mp4");
         let job = serde_json::json!({
@@ -1073,75 +1073,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "manual benchmark: RECORD_BENCH=1 cargo test bench_encode -- --ignored --nocapture"]
-    fn bench_encode() {
-        let dir = std::env::temp_dir().join(format!("record-bench-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        let frames_dir = dir.join("frames");
-        let (width, height) = (2214u32, 1476u32);
-        let frame_count = 360u64;
-
-        let mut recorder = crate::capture::Recorder::new(
-            &frames_dir,
-            crate::capture::Config { queue_frames: 512, ..Default::default() },
-        )
-        .unwrap();
-        let stride = width as usize * 4;
-        let mut bgra = vec![32u8; stride * height as usize];
-        for i in 0..frame_count {
-            let x0 = ((i * 12) % (width as u64 - 200)) as usize;
-            for y in 400..600 {
-                let row = y * stride;
-                for x in x0..x0 + 200 {
-                    let px = row + x * 4;
-                    bgra[px] = (i * 3 % 255) as u8;
-                    bgra[px + 1] = 180;
-                    bgra[px + 2] = 90;
-                }
-            }
-            recorder.capture(&bgra, stride, width, height, Some(Rect::sized(width, height)));
-        }
-        let segment = recorder.finish().unwrap();
-        assert_eq!(segment.metas().len() as u64, frame_count, "queue must not drop");
-        let times: Vec<u64> = segment.metas().iter().map(|m| (m.t_us + 500) / 1000).collect();
-        let span = times.last().unwrap() - times[0];
-        let duration = span + 8;
-        let pointer: Vec<serde_json::Value> = (0..duration / 16)
-            .map(|i| {
-                serde_json::json!({"tMs": i * 16, "x": (i * 7 % 2000) as f32, "y": (i * 5 % 1400) as f32})
-            })
-            .collect();
-
-        let font = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../assets/fonts/JetBrainsMono-Regular.ttf"
-        );
-        let video = dir.join("video.mp4");
-        let job = serde_json::json!({
-            "videoOut": video.to_str().unwrap(),
-            "cropsDir": dir.join("crops").to_str().unwrap(),
-            "captureDir": frames_dir.to_str().unwrap(),
-            "durationMs": duration,
-            "fontFile": font,
-            "markup": [],
-            "crops": [],
-            "pointer": pointer,
-            "clicks": [{"tMs": duration / 2, "x": 800.0, "y": 600.0}],
-        });
-        let start = std::time::Instant::now();
-        run(&job.to_string(), &|_| {}).unwrap();
-        eprintln!(
-            "RECORD_BENCH total={:?} for {} frames ({}ms of video at {}x{})",
-            start.elapsed(),
-            frame_count,
-            duration,
-            width,
-            height
-        );
-        fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
     fn trims_the_export_to_the_requested_window() {
         let dir = std::env::temp_dir().join(format!("record-trim-test-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1168,7 +1099,7 @@ mod tests {
 
         let font = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../../assets/fonts/JetBrainsMono-Regular.ttf"
+            "/../../assets/fonts/JetBrainsMono-Regular.ttf"
         );
         let video = dir.join("video.mp4");
         let job = serde_json::json!({

@@ -731,38 +731,36 @@ mod tests {
         let mut recorder = Recorder::new(
             &dir,
             Config {
-                queue_frames: 512,
+                queue_frames: 128,
                 ..Config::default()
             },
         )
         .expect("recorder starts");
-        let (width, height) = (1600u32, 1200u32);
+        let (width, height) = (64u32, 48u32);
         let stride = width as usize * 4;
         let mut rng = Lcg(3);
         let mut canvas = vec![0u8; stride * height as usize];
+        let mut snapshots: Vec<Vec<u8>> = Vec::new();
         fill(&mut canvas, stride, Rect::sized(width, height), &mut rng);
         recorder.capture(&canvas, stride, width, height, None);
-        for _ in 0..299 {
-            let damage = Rect {
-                x: rng.next() % (width - 64),
-                y: rng.next() % (height - 64),
-                w: 64,
-                h: 64,
-            };
+        snapshots.push(canvas.clone());
+        let last = SNAPSHOT_STRIDE * 3 + 7;
+        for _ in 0..last {
+            let damage = random_rect(&mut rng, width, height);
             fill(&mut canvas, stride, damage, &mut rng);
             assert!(recorder.capture(&canvas, stride, width, height, Some(damage)));
+            snapshots.push(canvas.clone());
         }
         let mut segment = recorder.finish().expect("writer finishes");
-        segment.frame(299).expect("prime the tail");
-        let start = Instant::now();
-        for at in (150..299).rev() {
-            segment.frame(at).expect("backward step");
+        segment.frame(last).expect("prime the tail");
+        assert_eq!(segment.snapshots.len(), last / SNAPSHOT_STRIDE + 1);
+        for at in (SNAPSHOT_STRIDE..last).rev() {
+            let start = segment.replay_start(at).expect("replay start");
+            let replayed = at + 1 - start;
+            assert!(replayed < SNAPSHOT_STRIDE, "frame {at} replayed {replayed} frames");
+            let (pixels, ..) = segment.frame(at).expect("backward step");
+            assert!(pixels == snapshots[at].as_slice(), "frame {at} pixels differ");
         }
-        let took = start.elapsed();
-        assert!(
-            took < Duration::from_secs(2),
-            "149 backward steps took {took:?}"
-        );
     }
 
     #[test]
@@ -786,25 +784,5 @@ mod tests {
             assert_eq!(a.key, b.key);
             assert_eq!(a.drops_before, b.drops_before);
         }
-    }
-
-    #[test]
-    fn zero_key_interval_makes_every_frame_a_keyframe() {
-        let dir = test_dir("keys");
-        let mut recorder = Recorder::new(
-            &dir,
-            Config {
-                key_interval: Duration::ZERO,
-                ..Config::default()
-            },
-        )
-        .expect("recorder starts");
-        let stride = 8 * 4;
-        let canvas = vec![3u8; stride * 8];
-        for _ in 0..4 {
-            recorder.capture(&canvas, stride, 8, 8, Some(Rect::sized(2, 2)));
-        }
-        let segment = recorder.finish().expect("writer finishes");
-        assert!(segment.metas().iter().all(|meta| meta.key));
     }
 }

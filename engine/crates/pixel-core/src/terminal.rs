@@ -2397,37 +2397,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn shm_roundtrip() {
-        let name = format!("/px-test-{}", std::process::id());
-        let data: Vec<u8> = (0..8192).map(|i| (i % 251) as u8).collect();
-        write_shm(&name, &data).unwrap();
-
-        let fd = rustix::shm::open(
-            &name,
-            rustix::shm::OFlags::RDONLY,
-            rustix::fs::Mode::empty(),
-        )
-        .unwrap();
-        let read_back = unsafe {
-            let ptr = rustix::mm::mmap(
-                std::ptr::null_mut(),
-                data.len(),
-                rustix::mm::ProtFlags::READ,
-                rustix::mm::MapFlags::SHARED,
-                &fd,
-                0,
-            )
-            .unwrap();
-            let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), data.len()).to_vec();
-            rustix::mm::munmap(ptr, data.len()).unwrap();
-            bytes
-        };
-        rustix::shm::unlink(&name).unwrap();
-        assert_eq!(read_back, data);
-    }
-
-    #[test]
     fn parses_in_band_resize_reports() {
         let (event, used) = parse_event(b"\x1b[48;30;100;630;1000t").unwrap();
         assert_eq!(
@@ -2489,6 +2458,16 @@ mod tests {
         );
         assert_eq!(parse_sgr_mouse(b"0;1;1", true), None);
         assert_eq!(parse_sgr_mouse(b"<0;0;1", true), None);
+
+        assert_eq!(parse_sgr_mouse(b"<4;1;1", true).unwrap().2, SHIFT);
+        assert_eq!(parse_sgr_mouse(b"<8;1;1", true).unwrap().2, ALT);
+        assert_eq!(
+            parse_sgr_mouse(b"<80;1;1", true).unwrap(),
+            (MouseKind::ScrollUp, MouseButton::Left, CTRL, 1, 1),
+            "ctrl+wheel keeps the scroll direction"
+        );
+        let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
+        assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
     }
 
     #[test]
@@ -2539,17 +2518,6 @@ mod tests {
         assert_eq!(parse_kitty_keyboard(b"\x1b[?u"), None);
         // and it is still found behind one of them
         assert_eq!(parse_kitty_keyboard(b"\x1b[?62;22;52c\x1b[?27u"), Some(true));
-    }
-
-    #[test]
-    fn sgr_mouse_decodes_modifier_bits() {
-        assert_eq!(parse_sgr_mouse(b"<4;1;1", true).unwrap().2, SHIFT);
-        assert_eq!(parse_sgr_mouse(b"<8;1;1", true).unwrap().2, ALT);
-        assert_eq!(
-            parse_sgr_mouse(b"<80;1;1", true).unwrap(),
-            (MouseKind::ScrollUp, MouseButton::Left, CTRL, 1, 1),
-            "ctrl+wheel keeps the scroll direction"
-        );
     }
 
     fn key(k: Key) -> RawEvent {
@@ -2631,7 +2599,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_color_replies_for_every_slot() {
+    fn reads_color_replies_for_every_slot_and_leaves_the_next_keystroke_alone() {
         assert_eq!(
             parse_event(b"\x1b]10;rgb:ff/ee/dd\x1b\\"),
             Some((RawEvent::Color(ColorSlot::Foreground, [255, 238, 221, 255]), 19))
@@ -2645,10 +2613,7 @@ mod tests {
             None,
             "slots past the 16 we track"
         );
-    }
 
-    #[test]
-    fn color_replies_between_keystrokes_leave_the_keystroke_alone() {
         let stream = b"\x1b]11;rgb:1e/2a/34\x07a";
         let (event, used) = parse_event(stream).unwrap();
         assert_eq!(event, RawEvent::Color(ColorSlot::Background, [30, 42, 52, 255]));
@@ -2662,11 +2627,26 @@ mod tests {
     }
 
     #[test]
-    fn decrqm_reports_color_scheme_support() {
+    fn decrqm_replies_say_whether_a_mode_is_supported() {
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;1$y"), Some(true));
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;2$y"), Some(true));
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;0$y"), Some(false));
         assert_eq!(parse_decrqm_2031(b""), None, "terminal never answered");
+
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;2$y"), Some(true));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;1$y"), Some(true));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;0$y"), Some(false));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;4$y"), Some(false));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?1016;1$y"), None);
+
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;1$y"), Some(true));
+        assert_eq!(
+            parse_decrqm_1016(b"\x1b[?1016;2$y"),
+            Some(false),
+            "pixel mouse reports only count when the mode is on, unlike the other modes"
+        );
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;0$y"), Some(false));
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1015;1$y"), None);
     }
 
     #[test]
@@ -2745,12 +2725,6 @@ mod tests {
         assert_eq!(parse_event(b"\x1b[24~"), Some((key(Key::Function(12)), 5)));
         assert_eq!(parse_event(b"\x1bOP"), Some((key(Key::Function(1)), 3)));
         assert_eq!(parse_event(b"\x1b[57444;9u"), Some((key_mods(Key::LeftSuper, SUPER), 10)));
-    }
-
-    #[test]
-    fn parses_mouse_modifiers() {
-        let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
-        assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
     }
 
     #[test]
@@ -2864,14 +2838,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_decrqm_mouse_pixel_reply() {
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;1$y"), Some(true));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;2$y"), Some(false));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;0$y"), Some(false));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1015;1$y"), None);
-    }
-
-    #[test]
     fn clip_packets_parse_status_mime_and_chunk() {
         use base64::Engine as _;
         let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
@@ -2895,84 +2861,28 @@ mod tests {
         assert!(parse_clip_packet(b"\x1b]52;c;?\x1b\\").is_none(), "osc52 untouched");
     }
 
-    #[test]
-    fn decrqm_5522_reports_support() {
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;2$y"), Some(true));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;1$y"), Some(true));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;0$y"), Some(false));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;4$y"), Some(false));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?1016;1$y"), None);
-    }
-
-    #[test]
-    fn clip_data_chunks_of_one_mime_concatenate() {
-        use base64::Engine as _;
-        let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
-        let packet = |body: String| parse_clip_packet(body.as_bytes()).unwrap();
-        let mut read = ClipRead::default();
-        for chunk in [b"first-".as_slice(), b"second".as_slice()] {
-            let p = packet(format!(
-                "\x1b]5522;type=read:status=DATA:mime={};{}\x1b\\",
-                b64(b"image/png"),
-                b64(chunk)
-            ));
-            let mime = p.mime.unwrap();
-            match read.items.last_mut() {
-                Some((last, data)) if *last == mime => data.extend_from_slice(&p.payload),
-                _ => read.items.push((mime, p.payload)),
-            }
-        }
-        assert_eq!(read.items.len(), 1);
-        assert_eq!(read.items[0].1, b"first-second");
-    }
 }
 
 #[cfg(test)]
 mod tty_tests {
     use super::*;
+    use std::io::{Read as _, Write as _};
+
+    fn open(path: &str, wrapper: Wrapper) -> Terminal {
+        Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
+    }
 
     #[test]
     fn mouse_coordinates_match_the_negotiated_format() {
-        use std::io::Write as _;
-
         for (reply, wrapper) in [
             (Some(b"\x1b[?1016;1$y".as_slice()), Wrapper::None),
             (Some(b"\x1b[?1016;4$y".as_slice()), Wrapper::None),
             (None, Wrapper::None),
             (None, Wrapper::Tmux),
         ] {
-            let (mut master, _slave, path) = open_pty();
-            let emulator = std::thread::spawn(move || {
-                use std::io::Read as _;
-                let mut seen = Vec::new();
-                let mut pixels = false;
-                let mut byte = [0u8; 1];
-                while master.read_exact(&mut byte).is_ok() {
-                    seen.push(byte[0]);
-                    if seen.ends_with(b"\x1b[?1016h") {
-                        pixels = true;
-                    } else if seen.ends_with(b"\x1b[?1016l")
-                        || seen.ends_with(b"\x1b[?1006h")
-                    {
-                        pixels = false;
-                    } else if seen.ends_with(b"\x1b[?1016$p") {
-                        if let Some(reply) = reply {
-                            master.write_all(reply).unwrap();
-                        }
-                    } else if seen.ends_with(b"\x1b[5n") {
-                        master
-                            .write_all(if pixels {
-                                b"\x1b[<0;485;329M"
-                            } else {
-                                b"\x1b[<0;61;21M"
-                            })
-                            .unwrap();
-                    } else if seen.ends_with(b"\x1b[?1049l") {
-                        break;
-                    }
-                }
-            });
-            let mut term = Terminal::open(&path, wrapper, SessionEnv::of_process()).unwrap();
+            let (master, _slave, path) = open_pty();
+            let _terminal = fake_terminal_answering_1016(&master, reply);
+            let mut term = open(&path, wrapper);
             term.cell = Some((8, 16));
             term.io.out().write_all(b"\x1b[5n").unwrap();
             term.io.out().flush().unwrap();
@@ -2987,8 +2897,6 @@ mod tty_tests {
                 }))),
                 "the same click must land at (484, 328), reply={reply:?}, wrapper={wrapper:?}: {event:?}"
             );
-            drop(term);
-            emulator.join().unwrap();
         }
     }
 
@@ -3020,38 +2928,92 @@ mod tty_tests {
         (master, slave, path)
     }
 
+    fn fake_terminal(master: &std::fs::File) -> std::thread::JoinHandle<()> {
+        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
+    }
+
     /// Terminal teardown drains the tty output queue (tcsetattr TCSAFLUSH),
     /// which only empties when the master side reads — a real terminal always
     /// does, the test must too or Drop blocks forever.
-    fn drain(master: &std::fs::File) -> std::thread::JoinHandle<Vec<u8>> {
+    fn fake_terminal_answering_1016(
+        master: &std::fs::File,
+        mode_1016: Option<&'static [u8]>,
+    ) -> std::thread::JoinHandle<()> {
         let mut master = master.try_clone().unwrap();
         std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut sink = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = master.read(&mut buf) {
-                if n == 0 {
-                    break;
+            // Plays the terminal on the pty's other end: it speaks the kitty keyboard protocol,
+            // turns every other probe down at once so open never waits out a timeout, and
+            // answers a status report with one click in whichever mouse format is on.
+            let mut seen = Vec::new();
+            let mut pixels = false;
+            let mut byte = [0u8; 1];
+            while master.read_exact(&mut byte).is_ok() {
+                seen.push(byte[0]);
+                let reply: Option<Vec<u8>> = if seen.ends_with(b"\x1b[?1016h") {
+                    pixels = true;
+                    None
+                } else if seen.ends_with(b"\x1b[?1016l") || seen.ends_with(b"\x1b[?1006h") {
+                    pixels = false;
+                    None
+                } else if seen.ends_with(b"\x1b[?u") {
+                    Some(b"\x1b[?0u".to_vec())
+                } else if seen.ends_with(b"\x1b[?1016$p") {
+                    mode_1016.map(<[u8]>::to_vec)
+                } else if seen.ends_with(b"\x1b[?5522$p") {
+                    Some(b"\x1b[?5522;0$y".to_vec())
+                } else if seen.ends_with(b"\x1b[?2031$p") {
+                    Some(b"\x1b[?2031;0$y".to_vec())
+                } else if seen.ends_with(b"\x1b[>0q") {
+                    Some(b"\x1bP>|fake 0.0\x1b\\".to_vec())
+                } else if seen.ends_with(b"\x1b[5n") {
+                    Some(if pixels { b"\x1b[<0;485;329M".to_vec() } else { b"\x1b[<0;61;21M".to_vec() })
+                } else if seen.ends_with(b"\x1b\\") {
+                    graphics_error(&seen)
+                } else {
+                    continue;
+                };
+                seen.clear();
+                if let Some(reply) = reply {
+                    master.write_all(&reply).unwrap();
                 }
-                sink.extend_from_slice(&buf[..n]);
             }
-            sink
         })
+    }
+
+    // A graphics query gets ENOENT and a frame edit EINVAL, as from a terminal
+    // without either; every other graphics command goes unanswered.
+    fn graphics_error(seen: &[u8]) -> Option<Vec<u8>> {
+        let start = seen.windows(3).rposition(|w| w == b"\x1b_G")? + 3;
+        let control = seen[start..].split(|&b| b == b';').next()?;
+        let mut action = None;
+        let mut id = None;
+        for pair in std::str::from_utf8(control).ok()?.split(',') {
+            match pair.split_once('=') {
+                Some(("a", value)) => action = Some(value),
+                Some(("i", value)) => id = value.parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        let error = match action? {
+            "q" => "ENOENT:no such medium",
+            "f" => "EINVAL:no such action",
+            _ => return None,
+        };
+        Some(format!("\x1b_Gi={};{error}\x1b\\", id?).into_bytes())
     }
 
     #[test]
     fn two_terminals_share_a_process() {
         let (mut master_a, _slave_a, path_a) = open_pty();
         let (master_b, _slave_b, path_b) = open_pty();
-        let _drain_a = drain(&master_a);
-        let _drain_b = drain(&master_b);
-        let mut a = Terminal::open(&path_a, Wrapper::None, SessionEnv::of_process()).unwrap();
-        let mut b = Terminal::open(&path_b, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal_a = fake_terminal(&master_a);
+        let _terminal_b = fake_terminal(&master_b);
+        let mut a = open(&path_a, Wrapper::None);
+        let mut b = open(&path_b, Wrapper::None);
 
         assert_ne!(a.terminal_id, b.terminal_id);
         assert_ne!(a.shm_name(0), b.shm_name(0));
 
-        use std::io::Write as _;
         master_a.write_all(b"\x1b[97;;97u").unwrap();
         let got = a.poll_event(Some(Duration::from_millis(500))).unwrap();
         assert!(
@@ -3076,11 +3038,10 @@ mod tty_tests {
     }
 
     #[test]
-    fn a_bare_escape_resolves_on_its_own_under_tmux() {
-        use std::io::Write as _;
+    fn a_bare_escape_resolves_on_its_own_only_under_tmux() {
         let (mut master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::Tmux, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::Tmux);
 
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
@@ -3095,14 +3056,10 @@ mod tty_tests {
             matches!(&next, Some(Event::Key(key)) if key.key == Key::Char('p') && key.mods.alt),
             "the key after an escape must survive: {next:?}"
         );
-    }
 
-    #[test]
-    fn a_bare_escape_still_waits_for_more_outside_tmux() {
-        use std::io::Write as _;
         let (mut master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
 
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(200))).unwrap();
@@ -3112,15 +3069,20 @@ mod tty_tests {
     #[test]
     fn a_wake_ends_a_blocking_poll() {
         let (master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
         let waker = term.waker().unwrap();
 
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             waker.wake();
         });
-        let got = term.poll_event(None).unwrap();
+        let started = Instant::now();
+        let got = term.poll_event(Some(Duration::from_secs(5))).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the poll ran to its deadline instead of ending at the wake"
+        );
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
     }
 }

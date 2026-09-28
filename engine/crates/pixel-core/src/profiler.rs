@@ -337,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spans_nest_with_depth_and_offsets() {
+    fn spans_nest_while_recording_and_still_run_outside_one() {
         start();
         span("outer", || {
             span("inner", || {
@@ -356,10 +356,6 @@ mod tests {
         assert!(outer.start_ms <= inner.start_ms);
         assert_eq!(data.counters[0].name, "items");
         assert!(data.epoch_ms > 0.0);
-    }
-
-    #[test]
-    fn spans_outside_a_recording_still_run() {
         assert_eq!(span("idle", || 7), 7);
     }
 

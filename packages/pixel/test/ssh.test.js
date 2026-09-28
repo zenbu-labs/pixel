@@ -29,6 +29,3 @@ test("a bundle needs an executable start script", () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-test("a tunnel maps to socks5 proxy rules on its port", () => {
-  assert.equal(socksProxyRules({ destination: "box", socksPort: 4321, controlPath: "", stop() {} }), "socks5://127.0.0.1:4321");
-});

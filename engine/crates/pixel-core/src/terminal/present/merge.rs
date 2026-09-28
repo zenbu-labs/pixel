@@ -90,13 +90,10 @@ mod tests {
         merge_rects(&mut rects, IMAGE_OVERHEAD_PX, usize::MAX);
         rects.sort_by_key(|r| (r.x, r.y));
         assert_eq!(rects, vec![rect(0, 0, 26, 15), rect(500, 500, 10, 10)]);
-    }
 
-    #[test]
-    fn stacked_scan_runs_become_one_rect() {
         let mut runs = vec![rect(64, 0, 128, 64), rect(64, 64, 128, 64), rect(64, 128, 128, 40)];
         merge_rects(&mut runs, IMAGE_OVERHEAD_PX, usize::MAX);
-        assert_eq!(runs, vec![rect(64, 0, 128, 168)]);
+        assert_eq!(runs, vec![rect(64, 0, 128, 168)], "stacked scan runs become one rect");
     }
 
     #[test]

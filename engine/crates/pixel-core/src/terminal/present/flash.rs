@@ -146,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn strips_frame_the_rect_without_overlapping() {
+    fn strips_frame_the_rect_without_overlapping_and_thin_out_for_tiny_rects() {
         let [top, bottom, left, right] = strips(Rect { x: 10, y: 20, w: 40, h: 30 });
         assert_eq!(top, Rect { x: 10, y: 20, w: 40, h: 3 });
         assert_eq!(bottom, Rect { x: 10, y: 47, w: 40, h: 3 });
@@ -155,13 +155,9 @@ mod tests {
         assert!(!top.intersects(left) && !bottom.intersects(right));
         let total: u64 = [top, bottom, left, right].iter().map(|r| r.area()).sum();
         assert_eq!(total, 40 * 30 - 34 * 24);
-    }
 
-    #[test]
-    fn tiny_rects_get_thin_strips() {
         let [top, _, left, _] = strips(Rect { x: 0, y: 0, w: 2, h: 5 });
-        assert_eq!(top.h, 1);
-        assert_eq!(left.w, 1);
+        assert_eq!((top.h, left.w), (1, 1));
     }
 
     #[test]

@@ -189,6 +189,12 @@ mod tests {
         assert_eq!(&new[add.side_start as usize..][..1], "E");
         assert_eq!(rows[0].count, Some(2));
         assert_eq!(rows.last().unwrap().count, Some(4));
+
+        let rows = diff("a\nx\nb\n".into(), "a\nb\nc\n".into(), None);
+        let del = rows.iter().find(|r| r.kind == "del").unwrap();
+        assert_eq!((del.old_line, del.new_line), (Some(2), None));
+        let add = rows.iter().find(|r| r.kind == "add").unwrap();
+        assert_eq!((add.old_line, add.new_line), (None, Some(3)));
     }
 
     #[test]
@@ -203,10 +209,7 @@ mod tests {
         let add = rows.iter().find(|r| r.kind == "add").unwrap();
         let e = &add.emphasis[0];
         assert_eq!(&add.text[e.start as usize..e.end as usize], "new_value");
-    }
 
-    #[test]
-    fn dissimilar_lines_get_no_emphasis() {
         let old = "completely different content here\n";
         let new = "nothing shared with that line\n";
         let rows = diff(old.into(), new.into(), None);
@@ -221,16 +224,5 @@ mod tests {
         assert_eq!(kinds(&rows), "++");
         assert_eq!(rows[0].text, "one");
         assert_eq!(rows[1].new_line, Some(2));
-    }
-
-    #[test]
-    fn line_numbers_stay_per_side() {
-        let old = "a\nx\nb\n";
-        let new = "a\nb\nc\n";
-        let rows = diff(old.into(), new.into(), None);
-        let del = rows.iter().find(|r| r.kind == "del").unwrap();
-        assert_eq!((del.old_line, del.new_line), (Some(2), None));
-        let add = rows.iter().find(|r| r.kind == "add").unwrap();
-        assert_eq!((add.old_line, add.new_line), (None, Some(3)));
     }
 }

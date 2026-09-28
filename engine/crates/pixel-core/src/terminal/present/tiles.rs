@@ -130,13 +130,10 @@ mod tests {
         let shown: u64 = tiles.iter().map(|t| t.rect.area()).sum();
         let opaque_area: u64 = opaque.iter().map(|o| o.area()).sum();
         assert_eq!(shown + opaque_area, u64::from(frame.0) * u64::from(frame.1), "tiles and opaque areas together cover the frame once");
-    }
 
-    #[test]
-    fn tiles_over_a_thin_strip_are_only_as_tall_as_the_strip() {
-        let tiles = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)]);
-        assert_eq!(tiles.len(), 4, "{:?}", tiles.iter().map(|t| t.rect).collect::<Vec<_>>());
-        assert!(tiles.iter().all(|t| t.rect.h == 40 && t.rect.w <= TILE_PX));
+        let strip = tiles_for((1000, 1000), &[rect(0, 40, 1000, 960)]);
+        assert_eq!(strip.len(), 4, "{:?}", strip.iter().map(|t| t.rect).collect::<Vec<_>>());
+        assert!(strip.iter().all(|t| t.rect.h == 40 && t.rect.w <= TILE_PX), "tiles over a thin strip are only as tall as the strip");
     }
 
     #[test]

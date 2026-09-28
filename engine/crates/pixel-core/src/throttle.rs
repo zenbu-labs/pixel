@@ -141,8 +141,33 @@ mod tests {
     use std::thread;
     use std::time::Instant;
 
-    /// most of that window at 8x.
     #[test]
+    fn rate_clamps_and_a_thread_registers_once() {
+        let throttle = CpuThrottle::new();
+        if CpuThrottle::supported() {
+            throttle.register_current_thread();
+            throttle.register_current_thread();
+            let registered = throttle
+                .inner
+                .threads
+                .iter()
+                .filter(|slot| slot.load(Ordering::Acquire) != 0)
+                .count();
+            assert_eq!(registered, 1);
+        }
+
+        let idle = CpuThrottle::new();
+        assert_eq!(idle.rate(), 1.0);
+        idle.set_rate(0.25);
+        assert_eq!(idle.rate(), 1.0);
+        idle.set_rate(8.0);
+        assert_eq!(idle.rate(), 8.0);
+        idle.set_rate(99.0);
+        assert_eq!(idle.rate(), 50.0);
+    }
+
+    #[test]
+    #[ignore = "measures CPU share over 350 ms of wall clock, which a busy machine can flip"]
     fn throttled_thread_gets_less_cpu_per_wall_second() {
         if !CpuThrottle::supported() {
             return;

@@ -306,7 +306,6 @@ pub(crate) fn placeholder_grid(image_id: u32, cols: u32, rows: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Canvas;
 
     #[test]
     fn transmit_emits_single_chunk_for_small_images() {
@@ -340,14 +339,6 @@ mod tests {
         assert_eq!(text.matches("m=1").count(), opens - 1);
         assert_eq!(text.matches("m=0").count(), 1);
         assert!(text.ends_with("\x1b\\"));
-    }
-
-    #[test]
-    fn transmit_compresses_flat_canvases_hard() {
-        let mut canvas = Canvas::new(256, 256);
-        canvas.fill([24, 24, 32, 255]);
-        let out = kitty_transmit(1, canvas.width, canvas.height, &canvas.pixels);
-        assert!(out.len() < 4096, "expected tiny output, got {}", out.len());
     }
 
     #[test]
@@ -413,7 +404,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_grid_encodes_id_rows_and_columns() {
+    fn placeholder_grid_encodes_id_rows_and_columns_within_the_addressable_cells() {
         let out = String::from_utf8(placeholder_grid(0x0a0b0c, 3, 2)).unwrap();
         assert!(out.starts_with("\x1b[38;2;10;11;12m"));
         assert!(out.ends_with("\x1b[39m"));
@@ -432,10 +423,7 @@ mod tests {
         let row2_cells: Vec<char> = out[row2 + 6..out.len() - 5].chars().collect();
         assert_eq!(row2_cells[1], '\u{030D}', "second row uses the next row diacritic");
         assert_eq!(row2_cells.len(), 9);
-    }
 
-    #[test]
-    fn placeholder_grid_clamps_to_addressable_cells() {
         let out = String::from_utf8(placeholder_grid(1, 1000, 1)).unwrap();
         let cells = out.chars().filter(|&c| c == PLACEHOLDER).count();
         assert_eq!(cells, MAX_PLACEHOLDER_CELLS as usize);

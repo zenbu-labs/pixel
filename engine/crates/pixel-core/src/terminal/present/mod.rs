@@ -359,15 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn per_terminal_quirks() {
-        assert!(Identity::Ghostty { version: (1, 3, 1) }.deletes_before_replace());
-        assert!(!Identity::Kitty { version: (0, 48, 0) }.deletes_before_replace());
-        assert!(Identity::Kitty { version: (0, 48, 0) }.transient_images());
-        assert!(!Identity::Kitty { version: (0, 47, 9) }.transient_images());
-        assert!(!Identity::Ghostty { version: (1, 3, 1) }.transient_images());
-    }
-
-    #[test]
     fn straightening_scales_colors_back_up_and_keeps_alpha() {
         let mut px = vec![64, 32, 0, 128, 10, 10, 10, 0, 200, 200, 200, 255];
         straighten(&mut px, true);

@@ -298,30 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_flushes_what_was_held_while_undecided() {
-        let mut pairing = NativePairing::new();
-        let mut hover = HoverOracle::new();
-        let now = Instant::now();
-        pairing.ingest(
-            vec![scroll(3.0, PHASE_BEGAN), scroll(2.0, 0)],
-            1.0,
-            now,
-            &mut hover,
-            PANE,
-            PAD,
-        );
-        assert_eq!(
-            pairing.take().1,
-            Vec::<(f32, f32)>::new(),
-            "nothing proved hover yet"
-        );
-
-        assert!(pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
-        assert_eq!(pairing.take().1, vec![(0.0, 3.0), (0.0, 2.0)]);
-    }
-
-    #[test]
-    fn a_proven_gesture_keeps_flowing_through_later_flicks() {
+    fn a_proven_gesture_keeps_flowing_until_the_pointer_moves_away() {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let now = Instant::now();
@@ -345,33 +322,20 @@ mod tests {
             PAD,
         );
         assert_eq!(pairing.take().1, vec![(0.0, 2.0)]);
-    }
 
-    #[test]
-    fn moving_the_pointer_away_voids_the_latch() {
-        let mut pairing = NativePairing::new();
-        let mut hover = HoverOracle::new();
-        let now = Instant::now();
         pairing.ingest(
-            vec![at(1.0, PHASE_BEGAN, (500.0, 500.0))],
+            vec![at(4.0, PHASE_BEGAN, (1400.0, 900.0))],
             1.0,
             now,
             &mut hover,
             PANE,
             PAD,
         );
-        pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover);
-        pairing.take();
-
-        pairing.ingest(
-            vec![at(2.0, PHASE_BEGAN, (1400.0, 900.0))],
-            1.0,
-            now,
-            &mut hover,
-            PANE,
-            PAD,
+        assert_eq!(
+            pairing.take().1,
+            Vec::<(f32, f32)>::new(),
+            "moving the pointer away voids the latch"
         );
-        assert_eq!(pairing.take().1, Vec::<(f32, f32)>::new());
     }
 
     #[test]
@@ -418,18 +382,14 @@ mod tests {
     }
 
     #[test]
-    fn a_silent_helper_leaves_ticks_to_the_discrete_path() {
+    fn ticks_stay_on_the_discrete_path_without_precise_native_deltas() {
         let mut pairing = NativePairing::new();
         let mut hover = HoverOracle::new();
         let now = Instant::now();
-        assert!(!pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover));
-    }
-
-    #[test]
-    fn imprecise_deltas_never_engage_the_native_stream() {
-        let mut pairing = NativePairing::new();
-        let mut hover = HoverOracle::new();
-        let now = Instant::now();
+        assert!(
+            !pairing.on_wheel_tick(Some((400.0, 300.0)), now, &mut hover),
+            "nothing native arrived at all"
+        );
         pairing.ingest(
             vec![NativeEvent::Scroll {
                 delta_x: 0.0,

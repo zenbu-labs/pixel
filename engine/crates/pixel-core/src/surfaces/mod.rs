@@ -230,11 +230,14 @@ mod tests {
     }
 
     #[test]
-    fn the_first_frame_writes_the_whole_surface() {
-        let source = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
+    fn a_first_frame_or_a_resize_writes_the_whole_surface_whatever_the_damage() {
+        let source = bgra(&[[1, 2, 3, 4]]);
         let damage = Rect { x: 0, y: 0, w: 1, h: 1 };
-        assert_eq!(write(1, 2, 1, Some(&[damage]), &source, 8, true), vec![Rect::sized(2, 1)]);
+        assert_eq!(write(1, 1, 1, Some(&[damage]), &source, 4, true), vec![Rect::sized(1, 1)]);
         with(1, |s| assert_eq!(s.pixels, source)).unwrap();
+        let grown = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
+        assert_eq!(write(1, 2, 1, Some(&[damage]), &grown, 8, true), vec![Rect::sized(2, 1)]);
+        with(1, |s| assert_eq!(s.pixels, grown)).unwrap();
         remove(1);
     }
 
@@ -249,30 +252,13 @@ mod tests {
     }
 
     #[test]
-    fn a_resize_ignores_damage_because_there_is_nothing_to_keep() {
-        write(3, 1, 1, None, &bgra(&[[1, 2, 3, 4]]), 4, true);
-        let grown = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
-        let damage = Rect { x: 0, y: 0, w: 1, h: 1 };
-        assert_eq!(write(3, 2, 1, Some(&[damage]), &grown, 8, true), vec![Rect::sized(2, 1)]);
-        with(3, |s| assert_eq!(s.pixels, grown)).unwrap();
-        remove(3);
-    }
-
-    #[test]
-    fn an_identical_frame_without_damage_reports_nothing_changed() {
+    fn an_identical_frame_reports_nothing_changed_with_or_without_damage() {
         let source = bgra(&[[1, 2, 3, 255], [5, 6, 7, 255]]);
         write(4, 2, 1, None, &source, 8, true);
         assert!(write(4, 2, 1, None, &source, 8, true).is_empty());
-        remove(4);
-    }
-
-    #[test]
-    fn a_damage_rect_over_identical_pixels_reports_nothing() {
-        let source = bgra(&[[1, 2, 3, 255], [5, 6, 7, 255]]);
-        write(5, 2, 1, None, &source, 8, true);
         let damage = Rect { x: 0, y: 0, w: 2, h: 1 };
-        assert!(write(5, 2, 1, Some(&[damage]), &source, 8, true).is_empty());
-        remove(5);
+        assert!(write(4, 2, 1, Some(&[damage]), &source, 8, true).is_empty());
+        remove(4);
     }
 
     #[test]

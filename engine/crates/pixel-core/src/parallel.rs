@@ -77,20 +77,13 @@ mod tests {
     }
 
     #[test]
-    fn a_thin_tall_region_in_a_wide_buffer_stays_on_one_thread() {
+    fn a_thin_tall_region_in_a_wide_buffer_stays_on_one_thread_and_still_reduces() {
         let stride = 8000;
         let rows = 900;
         let mut dst = vec![0u8; rows * stride];
         let threads = std::sync::Mutex::new(std::collections::HashSet::new());
-        row_bands(&mut dst, stride, rows, 10, 1 << 20, |_, _, count| { threads.lock().unwrap().insert(std::thread::current().id()); count }, |a, b| a + b);
+        let sum = row_bands(&mut dst, stride, rows, 10, 1 << 20, |_, _, count| { threads.lock().unwrap().insert(std::thread::current().id()); count }, |a, b| a + b);
         assert_eq!(threads.lock().unwrap().len(), 1, "9000 pixels of work is not worth a hand-off");
-    }
-
-    #[test]
-    fn small_work_stays_on_one_thread_and_reduces() {
-        let stride = 4;
-        let mut dst = vec![0u8; 4 * stride];
-        let sum = row_bands(&mut dst, stride, 4, 1, usize::MAX, |_, _, count| count, |a, b| a + b);
-        assert_eq!(sum, Some(4));
+        assert_eq!(sum, Some(rows));
     }
 }

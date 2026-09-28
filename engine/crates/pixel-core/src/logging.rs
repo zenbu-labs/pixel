@@ -191,8 +191,10 @@ pub fn entries_after(after: u64) -> Vec<LogEntry> {
 mod tests {
     use super::*;
 
+    // One test because the sinks are process-wide: run in parallel, the file half would
+    // push the memory half's entries out of the ring.
     #[test]
-    fn log_entries_are_kept_only_while_asked() {
+    fn sinks_are_off_by_default_bounded_in_memory_and_rotate_on_disk() {
         info("test-off", "dropped");
         assert!(entries_after(0).iter().all(|e| e.target != "test-off"));
         keep_in_memory(true);
@@ -206,10 +208,7 @@ mod tests {
         assert!(after.iter().all(|e| e.target != "test-a"));
         keep_in_memory(false);
         assert!(entries_after(0).is_empty());
-    }
 
-    #[test]
-    fn file_rotates_instead_of_growing() {
         let dir = std::env::temp_dir().join(format!("pixel-log-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("engine.jsonl");

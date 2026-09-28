@@ -1347,13 +1347,16 @@ mod tests {
         let mut canvas = Canvas::new(4, 1);
         canvas.push_clip(1.0, 0.0, 2.0, 1.0);
         canvas.fill_rect(0, 0, 4, 1, [7, 7, 7, 255]);
+        assert_eq!(&canvas.pixels[4..8], &[7, 7, 7, 255]);
         canvas.blend_mask(0, 0, 4, 1, &[255; 4], [9, 9, 9, 255], 0, 0.0);
+        assert_eq!(&canvas.pixels[4..8], &[9, 9, 9, 255]);
+        canvas.fill_rounded_rect(0.0, 0.0, 4.0, 1.0, [0.0; 4], [8, 8, 8, 255]);
+        assert_eq!(&canvas.pixels[4..8], &[8, 8, 8, 255]);
         assert_eq!(
             &canvas.pixels[0..4],
             &[0, 0, 0, 0],
             "left of clip untouched"
         );
-        assert_eq!(&canvas.pixels[4..8], &[9, 9, 9, 255]);
         assert_eq!(
             &canvas.pixels[12..16],
             &[0, 0, 0, 0],
@@ -1377,49 +1380,25 @@ mod tests {
     }
 
     #[test]
-    fn clip_masks_path_painting() {
-        let mut canvas = Canvas::new(4, 4);
-        canvas.push_clip(0.0, 0.0, 2.0, 4.0);
-        canvas.fill_rounded_rect(0.0, 0.0, 4.0, 4.0, [0.0; 4], [8, 8, 8, 255]);
-        assert_eq!(&canvas.pixels[0..4], &[8, 8, 8, 255]);
-        assert_eq!(
-            &canvas.pixels[8..12],
-            &[0, 0, 0, 0],
-            "beyond clip untouched"
-        );
-    }
-
-    #[test]
-    fn rounded_path_crossing_the_clip_edge_is_clipped() {
+    fn rounded_paths_are_clipped_at_the_edge_and_still_paint_inside_the_clip() {
         let mut canvas = Canvas::new(16, 8);
+        let px = |canvas: &Canvas, x: u32, y: u32| canvas.pixels[((y * 16 + x) * 4) as usize..][..4].to_vec();
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [8, 8, 8, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(4, 4), &[8, 8, 8, 255], "inside clip painted");
-        assert_eq!(px(12, 4), &[0, 0, 0, 0], "beyond clip untouched");
-    }
+        assert_eq!(px(&canvas, 4, 4), [8, 8, 8, 255], "inside clip painted");
+        assert_eq!(px(&canvas, 12, 4), [0, 0, 0, 0], "beyond clip untouched");
 
-    #[test]
-    fn rounded_path_inside_the_clip_still_paints() {
-        let mut canvas = Canvas::new(16, 8);
-        canvas.push_clip(0.0, 0.0, 16.0, 8.0);
-        canvas.fill_rounded_rect(4.0, 2.0, 8.0, 4.0, [1.5; 4], [8, 8, 8, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(8, 4), &[8, 8, 8, 255], "painted");
-        assert_eq!(px(1, 4), &[0, 0, 0, 0], "outside the rect untouched");
-    }
-
-    #[test]
-    fn repainting_under_the_same_clip_stays_clipped() {
-        let mut canvas = Canvas::new(16, 8);
-        canvas.push_clip(0.0, 0.0, 8.0, 8.0);
-        canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [8, 8, 8, 255]);
         canvas.pop_clip();
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [5, 5, 5, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(4, 4), &[5, 5, 5, 255], "second fill clipped the same");
-        assert_eq!(px(12, 4), &[0, 0, 0, 0], "beyond clip still untouched");
+        assert_eq!(px(&canvas, 4, 4), [5, 5, 5, 255], "second fill clipped the same");
+        assert_eq!(px(&canvas, 12, 4), [0, 0, 0, 0], "beyond clip still untouched");
+
+        canvas.pop_clip();
+        canvas.push_clip(0.0, 0.0, 16.0, 8.0);
+        canvas.fill_rounded_rect(4.0, 2.0, 8.0, 4.0, [1.5; 4], [8, 8, 8, 255]);
+        assert_eq!(px(&canvas, 8, 4), [8, 8, 8, 255], "a path wholly inside the clip paints");
+        assert_eq!(px(&canvas, 13, 4), [0, 0, 0, 0], "outside the rect untouched");
     }
 
     #[test]

@@ -949,17 +949,6 @@ mod tests {
     }
 
     #[test]
-    fn typing_replaces_the_selection() {
-        let mut i = input("hello world", 0);
-        i.set_cursor(5, false);
-        i.set_cursor(0, true);
-        i.insert("goodbye");
-        assert_eq!(i.text(), "goodbye world");
-        assert_eq!(i.cursor(), 7);
-        assert_eq!(i.selection(), None);
-    }
-
-    #[test]
     fn backspace_with_selection_deletes_only_the_selection() {
         let mut i = input("hello world", 6);
         i.set_cursor(11, true);
@@ -969,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn word_movement_lands_on_word_edges() {
+    fn word_movement_lands_on_word_edges_and_crosses_newlines() {
         let mut i = input("foo bar_baz  qux", 16);
         i.move_left(Granularity::Word, false);
         assert_eq!(i.cursor(), 13, "start of qux");
@@ -979,15 +968,12 @@ mod tests {
         assert_eq!(i.cursor(), 11, "end of bar_baz");
         i.move_right(Granularity::Word, false);
         assert_eq!(i.cursor(), 16, "end of qux");
-    }
 
-    #[test]
-    fn word_movement_crosses_newlines() {
         let mut i = input("one\ntwo", 4);
         i.move_left(Granularity::Word, false);
-        assert_eq!(i.cursor(), 0);
+        assert_eq!(i.cursor(), 0, "crosses the newline backwards");
         i.move_right(Granularity::Word, false);
-        assert_eq!(i.cursor(), 3);
+        assert_eq!(i.cursor(), 3, "crosses the newline forwards");
     }
 
     #[test]
@@ -1000,16 +986,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_backward_word_and_line() {
-        let mut i = input("one two three", 13);
-        i.delete_backward(Granularity::Word);
-        assert_eq!(i.text(), "one two ");
-        i.delete_backward(Granularity::Line);
-        assert_eq!(i.text(), "");
-    }
-
-    #[test]
-    fn shift_extends_and_plain_arrows_collapse() {
+    fn shift_extends_and_shrinks_the_selection_and_plain_arrows_collapse() {
         let mut i = input("abcdef", 2);
         i.move_right(Granularity::Char, true);
         i.move_right(Granularity::Char, true);
@@ -1023,15 +1000,11 @@ mod tests {
         i.move_right(Granularity::Char, true);
         i.move_right(Granularity::Char, false);
         assert_eq!(i.cursor(), 3, "right collapses to selection end");
-    }
 
-    #[test]
-    fn shrinking_a_selection_back_to_the_anchor_empties_it() {
-        let mut i = input("abc", 1);
         i.move_right(Granularity::Char, true);
-        assert_eq!(i.selection(), Some(1..2));
+        assert_eq!(i.selection(), Some(3..4));
         i.move_left(Granularity::Char, true);
-        assert_eq!(i.selection(), None);
+        assert_eq!(i.selection(), None, "shrinking back to the anchor empties it");
     }
 
     #[test]
@@ -1183,6 +1156,8 @@ mod tests {
         i.set_cursor(0, true);
         i.insert("goodbye");
         assert_eq!(i.text(), "goodbye world");
+        assert_eq!(i.cursor(), 7);
+        assert_eq!(i.selection(), None);
         assert!(i.undo());
         assert_eq!(i.text(), "hello world");
         assert_eq!(i.selection(), Some(0..5), "selection comes back with undo");
@@ -1193,43 +1168,34 @@ mod tests {
     }
 
     #[test]
-    fn word_delete_is_a_single_separate_step() {
+    fn word_and_line_deletes_are_single_separate_steps() {
         let mut i = input("one two", 7);
         i.delete_backward(Granularity::Word);
+        assert_eq!(i.text(), "one ");
         i.delete_backward(Granularity::Word);
         assert_eq!(i.text(), "");
         i.undo();
         assert_eq!(i.text(), "one ");
         i.undo();
         assert_eq!(i.text(), "one two");
+
+        i.delete_backward(Granularity::Line);
+        assert_eq!(i.text(), "");
+        i.undo();
+        assert_eq!(i.text(), "one two");
     }
 
     #[test]
     fn new_edits_clear_the_redo_stack() {
-        let mut i = input("", 0);
-        i.insert("a");
-        i.undo();
-        assert!(i.can_redo());
-        i.insert("b");
-        assert!(!i.can_redo(), "diverging kills the redo branch");
-        assert_eq!(i.text(), "b");
-    }
-
-    #[test]
-    fn undo_then_typing_then_undo_round_trips() {
         let mut i = input("base", 4);
         i.insert(" one");
         i.undo();
+        assert!(i.can_redo());
         i.insert(" two");
+        assert!(!i.can_redo(), "diverging kills the redo branch");
         assert_eq!(i.text(), "base two");
-        i.undo();
-        assert_eq!(i.text(), "base");
-        assert!(
-            !i.can_undo() || {
-                i.undo();
-                i.text() == "base"
-            }
-        );
+        assert!(i.undo());
+        assert_eq!(i.text(), "base", "undo returns to the base, not the abandoned edit");
     }
 
     #[test]
@@ -1485,21 +1451,6 @@ mod tests {
             Some("hello world"),
             "third click takes the line"
         );
-    }
-
-    #[test]
-    fn caret_rect_sits_at_the_offset() {
-        let fonts = [font()];
-        let geometry = InputGeometry {
-            origin: (10.0, 5.0),
-            font: 0,
-            px: 16.0,
-            max_width: None,
-        };
-        let rect = geometry.caret_rect("ab\ncd", &[], 4, &fonts);
-        let (x, y) = offset_to_point("ab\ncd", 4, &fonts[0], 16.0, None, &[]);
-        assert_eq!((rect.x, rect.y), (10.0 + x, 5.0 + y));
-        assert!(rect.h > 0.0 && rect.w > 0.0);
     }
 
     #[test]

@@ -1085,17 +1085,6 @@ mod tests {
     use crate::terminal::WindowSize;
 
     #[test]
-    fn window_clips_padding_remainder_to_grid() {
-        let ws = WindowSize {
-            cols: 100,
-            rows: 40,
-            width_px: 1007,
-            height_px: 845,
-        };
-        assert_eq!(window_from(&ws, (10, 20), false), (1000, 800));
-    }
-
-    #[test]
     fn window_uses_grid_when_pixels_missing() {
         let ws = WindowSize {
             cols: 80,
@@ -1107,7 +1096,14 @@ mod tests {
     }
 
     #[test]
-    fn window_clamps_when_cell_overestimated() {
+    fn window_is_whole_cells_within_the_reported_pixels() {
+        let ws = WindowSize {
+            cols: 100,
+            rows: 40,
+            width_px: 1007,
+            height_px: 845,
+        };
+        assert_eq!(window_from(&ws, (10, 20), false), (1000, 800));
         let ws = WindowSize {
             cols: 100,
             rows: 40,

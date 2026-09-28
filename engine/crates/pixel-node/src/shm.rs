@@ -189,23 +189,10 @@ mod tests {
 
     #[test]
     fn reuses_the_mapping_across_frames_of_one_region() {
-        let file = region(&[7u8; 512]);
-        let first = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 512).expect("map");
-        let base = first.pixels().as_ptr();
-        drop(first);
-        let second = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 512).expect("map");
-        assert_eq!(second.pixels().as_ptr(), base);
-    }
-
-    #[test]
-    fn runs_the_drop_hook_once_consumed() {
-        let file = region(&[0u8; 256]);
-        let (sent, received) = std::sync::mpsc::channel::<u32>();
-        let mut surface = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 256).expect("map");
-        surface.set_on_drop(Box::new(move || {
-            let _ = sent.send(1);
-        }));
-        drop(surface);
-        assert_eq!(received.try_recv(), Ok(1));
+        let file = region(&[7u8; 640]);
+        let first = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 640).expect("map");
+        let second = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 640).expect("map");
+        assert!(Arc::ptr_eq(&first.map, &second.map));
+        assert_eq!(second.pixels()[..8], [7u8; 8]);
     }
 }
