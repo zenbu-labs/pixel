@@ -239,7 +239,7 @@ mod tests {
     }
 
     #[test]
-    fn cell_quantized_positions_cannot_locate_the_pane() {
+    fn positions_that_disagree_or_are_cell_quantized_cannot_locate_the_pane() {
         const CELL: (f32, f32) = (16.0, 34.0);
         let origin = (100.0, 200.0);
         let quantize = |v: f32, c: f32| (v / c).floor() * c + c / 2.0;
@@ -260,6 +260,16 @@ mod tests {
         assert!(
             !quantized.calibrated(),
             "cell positions cannot, so do not pretend they can"
+        );
+
+        let mut disagreeing = HoverOracle::new();
+        for offset in [0.0, 40.0, 0.0] {
+            disagreeing.note_cursor((500.0 + offset, 500.0), now);
+            disagreeing.note_local((400.0, 300.0), now);
+        }
+        assert!(
+            !disagreeing.calibrated(),
+            "a sample that disagrees restarts the count"
         );
     }
 
@@ -300,17 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn disagreeing_samples_restart_the_count() {
-        let mut oracle = HoverOracle::new();
-        let now = Instant::now();
-        for offset in [0.0, 40.0, 0.0] {
-            oracle.note_cursor((500.0 + offset, 500.0), now);
-            oracle.note_local((400.0, 300.0), now);
-        }
-        assert!(!oracle.calibrated());
-    }
-
-    #[test]
     fn fast_motion_does_not_calibrate() {
         let mut oracle = HoverOracle::new();
         let now = Instant::now();
@@ -335,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_that_contradicts_geometry_recalibrates() {
+    fn a_tick_or_pointer_reports_that_contradict_geometry_recalibrate() {
         let (mut oracle, now) = calibrated();
         oracle.note_cursor((800.0, 500.0), now);
         assert_eq!(
@@ -364,6 +363,20 @@ mod tests {
             oracle.verdict(now, PANE, PAD),
             Verdict::Deliver,
             "relocated to 400,200"
+        );
+        oracle.note_cursor((399.0, 500.0), now);
+        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard);
+
+        let (mut oracle, now) = calibrated();
+        for _ in 0..SAMPLES_TO_TRUST + 1 {
+            oracle.note_cursor((800.0, 500.0), now);
+            oracle.note_local((400.0, 300.0), now);
+        }
+        oracle.note_cursor((401.0, 500.0), now);
+        assert_eq!(
+            oracle.verdict(now, PANE, PAD),
+            Verdict::Deliver,
+            "pointer reports alone relocate a stale rect"
         );
         oracle.note_cursor((399.0, 500.0), now);
         assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard);
@@ -417,19 +430,6 @@ mod tests {
             Verdict::Unknown,
             "moved, so ask again"
         );
-    }
-
-    #[test]
-    fn a_window_that_moved_relocates_from_pointer_reports_alone() {
-        let (mut oracle, now) = calibrated();
-        for _ in 0..SAMPLES_TO_TRUST + 1 {
-            oracle.note_cursor((800.0, 500.0), now);
-            oracle.note_local((400.0, 300.0), now);
-        }
-        oracle.note_cursor((401.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Deliver);
-        oracle.note_cursor((399.0, 500.0), now);
-        assert_eq!(oracle.verdict(now, PANE, PAD), Verdict::Discard);
     }
 
     #[test]

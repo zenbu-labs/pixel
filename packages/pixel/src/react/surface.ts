@@ -25,12 +25,14 @@ export class Surface {
   present(frame: SurfaceFrame): void {
     if (this.closed) {
       if ("shm" in frame) frame.released?.();
-      return;
+        return;
     }
     if ("ioSurface" in frame) {
       const submit = this.engine.updateSurfaceTexture;
       if (!submit) throw new Error("IOSurface frames are not supported on this platform");
-      submit.call(this.engine, this.id, frame.ioSurface, frame.damage);
+      const address = frame.ioSurface.readUIntLE(0, 6);
+      const d = frame.damage;
+      submit.call(this.engine, this.id, address, d?.x ?? 0, d?.y ?? 0, d?.width ?? 0, d?.height ?? 0);
     } else if ("shm" in frame) {
       const submit = this.engine.updateSurfaceShm;
       if (!submit) throw new Error("shared memory frames are not supported on this platform");

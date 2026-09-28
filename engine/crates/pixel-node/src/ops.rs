@@ -1,10 +1,6 @@
 use std::collections::HashMap;
 
-/**
- * interesting?
- * 
- * ah svg stuff suka suka
- */
+
 use pixel_core::{
     Align, Border, BorderSide, Color, Dimension, Edges, Engine, FlexDirection, Gutter,
     HighlightArea, ImageProps, InputProps, Inset, InsetValue, Justify, LineCap, LineJoin,
@@ -124,8 +120,28 @@ enum Op {
     QueryLayout {},
     ProfileStart {},
     ProfileStop {},
+    SetLogCapture {
+        on: bool,
+    },
+    SetLogFile {
+        #[serde(default)]
+        path: Option<String>,
+    },
     SetCpuThrottle {
         rate: f32,
+    },
+    #[serde(rename_all = "camelCase")]
+    SetRender {
+        #[serde(default)]
+        max_fps: Option<f32>,
+        #[serde(default)]
+        frame_budget_mbps: Option<f32>,
+        #[serde(default)]
+        highlight_transmits: Option<bool>,
+        #[serde(default)]
+        compare_frames: Option<bool>,
+        #[serde(default)]
+        frame_events: Option<bool>,
     },
     RegisterFont {
         path: String,
@@ -526,6 +542,7 @@ struct StyleDto {
     scrollbar: Option<ScrollbarDto>,
     wrap: Option<bool>,
     ellipsis: Option<bool>,
+    opaque: Option<bool>,
     selectable: Option<bool>,
     selection_color: Option<Color>,
     selection_mode: Option<String>,
@@ -629,6 +646,7 @@ impl StyleDto {
             hover_color: self.hover_color,
             scrollbar: self.scrollbar.map(|s| s.into_style(rem)),
             wrap: self.wrap.unwrap_or(true),
+            opaque: self.opaque.unwrap_or(false),
             ellipsis: self.ellipsis.unwrap_or(false),
             selectable: self.selectable,
             selection_color: self.selection_color,
@@ -849,7 +867,26 @@ fn apply_op(
         }
         Op::ProfileStart {} => engine.profile_start(),
         Op::ProfileStop {} => engine.profile_stop(),
+        Op::SetLogCapture { on } => engine.set_log_capture(on),
+        Op::SetLogFile { path } => engine.set_log_file(path.map(std::path::PathBuf::from)),
         Op::SetCpuThrottle { rate } => engine.set_cpu_throttle(rate),
+        Op::SetRender { max_fps, frame_budget_mbps, highlight_transmits, compare_frames, frame_events } => {
+            if let Some(fps) = max_fps {
+                engine.set_max_fps(fps);
+            }
+            if let Some(mbps) = frame_budget_mbps {
+                engine.set_frame_budget_mbps(mbps);
+            }
+            if let Some(on) = highlight_transmits {
+                engine.term.set_highlight_transmits(on);
+            }
+            if let Some(on) = compare_frames {
+                engine.set_compare_surfaces(on);
+            }
+            if let Some(on) = frame_events {
+                engine.set_frame_events(on);
+            }
+        }
         Op::RegisterFont { .. } => unreachable!("handled before the per-view bindings"),
         Op::SetKeyCapture { keys } => engine.key_capture = keys,
         Op::SetPointerShape { shape } => {
@@ -985,4 +1022,28 @@ fn layout_json(engine: &Engine, ids: &IdMap, view: usize) -> String {
         "nodes": nodes,
     })
     .to_string()
+}
+
+#[cfg(test)]
+mod set_render_tests {
+    use super::Op;
+
+    #[test]
+    fn set_render_reads_camel_cased_fields_and_leaves_missing_ones_unset() {
+        let op: Op = serde_json::from_str(r#"{"op":"setRender","maxFps":60,"highlightTransmits":true,"compareFrames":false}"#).unwrap();
+        let Op::SetRender { max_fps, frame_budget_mbps, highlight_transmits, compare_frames, frame_events } = op else {
+            panic!("parsed as another op");
+        };
+        assert_eq!(max_fps, Some(60.0));
+        assert_eq!(frame_budget_mbps, None);
+        assert_eq!(highlight_transmits, Some(true));
+        assert_eq!(compare_frames, Some(false));
+        assert_eq!(frame_events, None);
+        let full = r#"{"view":0,"seq":1,"ops":[{"op":"setRender","maxFps":120,"frameBudgetMbps":3,"highlightTransmits":false}]}"#;
+        let envelope: super::Envelope<'_> = serde_json::from_str(full).unwrap();
+        for raw in envelope.ops {
+            let op: Op = serde_json::from_str(raw.get()).unwrap();
+            assert!(matches!(op, Op::SetRender { frame_budget_mbps: Some(3.0), .. }));
+        }
+    }
 }

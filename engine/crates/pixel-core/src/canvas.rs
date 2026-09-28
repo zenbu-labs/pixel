@@ -1,4 +1,15 @@
+use crate::surfaces::{OpaqueArea, Rect};
 use crate::text_input::{MARK_CHAR, Mark, mark_advance_at};
+
+#[derive(Clone, Copy)]
+pub struct Frame<'a> {
+    pub canvas: &'a Canvas,
+    pub premultiplied: bool,
+    pub changed: &'a [Rect],
+    pub repainted: &'a [Rect],
+    pub opaque: &'a [OpaqueArea],
+    pub ui_over_surfaces: &'a [Rect],
+}
 
 type GlyphKey = (usize, char, u32);
 type GlyphCache = std::collections::HashMap<GlyphKey, (fontdue::Metrics, Vec<u8>)>;
@@ -703,8 +714,6 @@ impl Canvas {
         if x2 <= x1 || y2 <= y1 || color[3] == 0 {
             return;
         }
-        // blend_pixel expects a premultiplied source like the pixmaps it usually blends;
-        // a style colour is straight rgba
         let alpha = u32::from(color[3]);
         let premultiplied = [
             ((u32::from(color[0]) * alpha + 127) / 255) as u8,
@@ -786,6 +795,67 @@ impl Canvas {
             dst_region,
             dst_stride,
             rows,
+            (x2 - x1) as usize,
+            1 << 20,
+            |band, first, count| run_rows(band, y1 + first as i64, count),
+            |(), ()| (),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn blit_bgra_rounded_hint(
+        &mut self,
+        x: f32,
+        y: f32,
+        src: &[u8],
+        src_w: u32,
+        src_h: u32,
+        radius: [f32; 4],
+    ) {
+        let (cx1, cy1, cx2, cy2) = self.clip_bounds();
+        let x0 = x.round() as i64;
+        let y0 = y.round() as i64;
+        let x1 = x0.max(cx1 as i64);
+        let y1 = y0.max(cy1 as i64);
+        let x2 = (x0 + i64::from(src_w)).min(cx2 as i64);
+        let y2 = (y0 + i64::from(src_h)).min(cy2 as i64);
+        if x2 <= x1 || y2 <= y1 || src.len() < src_w as usize * src_h as usize * 4 {
+            return;
+        }
+        let src_stride = src_w as usize * 4;
+        let height = i64::from(src_h);
+        let dst_stride = self.width as usize * 4;
+        let rows = (y2 - y1) as usize;
+        let run_rows = |dst_rows: &mut [u8], first_row: i64, count: usize| {
+            for r in 0..count {
+                let row = first_row + r as i64;
+                let (inset_l, inset_r) = corner_insets(radius, row - y0, height);
+                let rx1 = x1.max(x0 + inset_l);
+                let rx2 = x2.min(x0 + i64::from(src_w) - inset_r);
+                if rx2 <= rx1 {
+                    continue;
+                }
+                let col0 = (rx1 - x0) as usize * 4;
+                let col1 = (rx2 - x0) as usize * 4;
+                let src_off = (row - y0) as usize * src_stride;
+                let src_row = &src[src_off + col0..src_off + col1];
+                let dst_off = r * dst_stride + rx1 as usize * 4;
+                let dst_row = &mut dst_rows[dst_off..dst_off + src_row.len()];
+                for (dst, px) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
+                    dst[0] = px[2];
+                    dst[1] = px[1];
+                    dst[2] = px[0];
+                    dst[3] = px[3];
+                }
+            }
+        };
+        let dst_from = y1 as usize * dst_stride;
+        let dst_region = &mut self.pixels[dst_from..y2 as usize * dst_stride];
+        crate::parallel::row_bands(
+            dst_region,
+            dst_stride,
+            rows,
+            (x2 - x1) as usize,
             1 << 20,
             |band, first, count| run_rows(band, y1 + first as i64, count),
             |(), ()| (),
@@ -829,31 +899,6 @@ impl Canvas {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn blit_scaled_rgba_rounded_hint(
-        &mut self,
-        x: f32,
-        y: f32,
-        w: f32,
-        h: f32,
-        src: &[u8],
-        src_w: u32,
-        src_h: u32,
-        radius: [f32; 4],
-    ) {
-        let dst_w = w.round().max(0.0) as u32;
-        let dst_h = h.round().max(0.0) as u32;
-        if (dst_w, dst_h) == (src_w, src_h)
-            && src_w > 0
-            && src.len() >= src_w as usize * src_h as usize * 4
-        {
-            if let Some(image) = tiny_skia::PixmapRef::from_bytes(src, src_w, src_h) {
-                self.blit_image_rounded_hint(x, y, image, radius, true);
-            }
-            return;
-        }
-        self.blit_scaled_rgba_rounded(x, y, w, h, src, src_w, src_h, radius);
-    }
-    #[allow(clippy::too_many_arguments)]
     pub fn blit_scaled_rgba_rounded(
         &mut self,
         x: f32,
@@ -889,7 +934,8 @@ impl Canvas {
         if x2 <= x1 || y2 <= y1 {
             return;
         }
-        crate::profiler::count("surface.resampled", 1);
+        // resample?
+        crate::profiler::count("surface.resampled", || 1);
         LAST_RESAMPLE.with(|last| {
             let sizes = (src_w, src_h, dst_w, dst_h);
             if last.get() != Some(sizes) {
@@ -1301,13 +1347,16 @@ mod tests {
         let mut canvas = Canvas::new(4, 1);
         canvas.push_clip(1.0, 0.0, 2.0, 1.0);
         canvas.fill_rect(0, 0, 4, 1, [7, 7, 7, 255]);
+        assert_eq!(&canvas.pixels[4..8], &[7, 7, 7, 255]);
         canvas.blend_mask(0, 0, 4, 1, &[255; 4], [9, 9, 9, 255], 0, 0.0);
+        assert_eq!(&canvas.pixels[4..8], &[9, 9, 9, 255]);
+        canvas.fill_rounded_rect(0.0, 0.0, 4.0, 1.0, [0.0; 4], [8, 8, 8, 255]);
+        assert_eq!(&canvas.pixels[4..8], &[8, 8, 8, 255]);
         assert_eq!(
             &canvas.pixels[0..4],
             &[0, 0, 0, 0],
             "left of clip untouched"
         );
-        assert_eq!(&canvas.pixels[4..8], &[9, 9, 9, 255]);
         assert_eq!(
             &canvas.pixels[12..16],
             &[0, 0, 0, 0],
@@ -1331,49 +1380,25 @@ mod tests {
     }
 
     #[test]
-    fn clip_masks_path_painting() {
-        let mut canvas = Canvas::new(4, 4);
-        canvas.push_clip(0.0, 0.0, 2.0, 4.0);
-        canvas.fill_rounded_rect(0.0, 0.0, 4.0, 4.0, [0.0; 4], [8, 8, 8, 255]);
-        assert_eq!(&canvas.pixels[0..4], &[8, 8, 8, 255]);
-        assert_eq!(
-            &canvas.pixels[8..12],
-            &[0, 0, 0, 0],
-            "beyond clip untouched"
-        );
-    }
-
-    #[test]
-    fn rounded_path_crossing_the_clip_edge_is_clipped() {
+    fn rounded_paths_are_clipped_at_the_edge_and_still_paint_inside_the_clip() {
         let mut canvas = Canvas::new(16, 8);
+        let px = |canvas: &Canvas, x: u32, y: u32| canvas.pixels[((y * 16 + x) * 4) as usize..][..4].to_vec();
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [8, 8, 8, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(4, 4), &[8, 8, 8, 255], "inside clip painted");
-        assert_eq!(px(12, 4), &[0, 0, 0, 0], "beyond clip untouched");
-    }
+        assert_eq!(px(&canvas, 4, 4), [8, 8, 8, 255], "inside clip painted");
+        assert_eq!(px(&canvas, 12, 4), [0, 0, 0, 0], "beyond clip untouched");
 
-    #[test]
-    fn rounded_path_inside_the_clip_still_paints() {
-        let mut canvas = Canvas::new(16, 8);
-        canvas.push_clip(0.0, 0.0, 16.0, 8.0);
-        canvas.fill_rounded_rect(4.0, 2.0, 8.0, 4.0, [1.5; 4], [8, 8, 8, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(8, 4), &[8, 8, 8, 255], "painted");
-        assert_eq!(px(1, 4), &[0, 0, 0, 0], "outside the rect untouched");
-    }
-
-    #[test]
-    fn repainting_under_the_same_clip_stays_clipped() {
-        let mut canvas = Canvas::new(16, 8);
-        canvas.push_clip(0.0, 0.0, 8.0, 8.0);
-        canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [8, 8, 8, 255]);
         canvas.pop_clip();
         canvas.push_clip(0.0, 0.0, 8.0, 8.0);
         canvas.fill_rounded_rect(0.0, 0.0, 16.0, 8.0, [2.0; 4], [5, 5, 5, 255]);
-        let px = |x: u32, y: u32| &canvas.pixels[((y * 16 + x) * 4) as usize..][..4];
-        assert_eq!(px(4, 4), &[5, 5, 5, 255], "second fill clipped the same");
-        assert_eq!(px(12, 4), &[0, 0, 0, 0], "beyond clip still untouched");
+        assert_eq!(px(&canvas, 4, 4), [5, 5, 5, 255], "second fill clipped the same");
+        assert_eq!(px(&canvas, 12, 4), [0, 0, 0, 0], "beyond clip still untouched");
+
+        canvas.pop_clip();
+        canvas.push_clip(0.0, 0.0, 16.0, 8.0);
+        canvas.fill_rounded_rect(4.0, 2.0, 8.0, 4.0, [1.5; 4], [8, 8, 8, 255]);
+        assert_eq!(px(&canvas, 8, 4), [8, 8, 8, 255], "a path wholly inside the clip paints");
+        assert_eq!(px(&canvas, 13, 4), [0, 0, 0, 0], "outside the rect untouched");
     }
 
     #[test]

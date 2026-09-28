@@ -6,7 +6,7 @@ import { cursorShapeFor } from "./cursor";
 import { DevtoolsWindow } from "./devtools";
 import { FaviconCache } from "./favicon";
 import type { DevtoolsAction } from "./devtools";
-import { frameRate } from "./frame-rate";
+import { frameRate, onFrameRateChange } from "./frame-rate";
 import { PageInput } from "./input";
 import { offscreenPreferences } from "./offscreen";
 import { BitmapPresenter, presentPaint } from "./paint";
@@ -87,6 +87,7 @@ export class PageHost {
   private layout: SurfaceLayout;
   private state: WebViewState;
   private stopped = false;
+  private stopWatchingFrameRate?: () => void;
   private contentFocused = false;
   private readonly input: PageInput;
   private readonly clipboardRead: boolean;
@@ -163,6 +164,7 @@ export class PageHost {
     this.window.webContents.on("will-navigate", (event, url) => {
       if (this.quitLink(url)) event.preventDefault();
     });
+    this.stopWatchingFrameRate = onFrameRateChange(this.onDisplayChange);
     screen.on("display-added", this.onDisplayChange);
     screen.on("display-removed", this.onDisplayChange);
     screen.on("display-metrics-changed", this.onDisplayChange);
@@ -490,6 +492,8 @@ export class PageHost {
   private teardown() {
     for (const popup of [...this.popups]) popup.close();
     this.devtools?.close();
+    this.stopWatchingFrameRate?.();
+    this.stopWatchingFrameRate = undefined;
     screen.off("display-added", this.onDisplayChange);
     screen.off("display-removed", this.onDisplayChange);
     screen.off("display-metrics-changed", this.onDisplayChange);

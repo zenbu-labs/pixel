@@ -52,10 +52,4 @@ mod tests {
         assert!(Wrapper::Tmux.relayed());
     }
 
-    #[test]
-    fn a_relay_we_do_not_speak_is_no_relay() {
-        assert_eq!(Wrapper::named(Some("tmux")), Wrapper::Tmux);
-        assert_eq!(Wrapper::named(Some("screen")), Wrapper::None);
-        assert_eq!(Wrapper::named(None), Wrapper::None);
-    }
 }

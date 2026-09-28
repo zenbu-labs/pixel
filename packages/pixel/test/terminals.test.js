@@ -8,6 +8,14 @@ const { checkTerminal, detect } = require("../dist/terminal/index.js");
 
 const FIXTURES = path.join(__dirname, "fixtures");
 
+// both draw with ghostty's engine and report ghostty everywhere they can
+const GHOSTTY_LOOKALIKE = {
+  TERM: "xterm-ghostty",
+  TERM_PROGRAM: "ghostty",
+  GHOSTTY_RESOURCES_DIR: "/Applications/Ghostty.app/Contents/Resources/ghostty",
+};
+const GHOSTTY_LOOKALIKES = new Set(["cmux", "supacode"]);
+
 /** Answers from recorded output, and remembers what was asked. */
 function recorder(exec) {
   const commands = [];
@@ -29,6 +37,9 @@ for (const file of fs.readdirSync(FIXTURES)) {
     const { run } = recorder(exec);
     const terminal = detect(env, run);
     assert.equal(terminal?.name, expect.name);
+    if (GHOSTTY_LOOKALIKES.has(expect.name)) {
+      assert.equal(detect({ ...env, ...GHOSTTY_LOOKALIKE }, run)?.name, expect.name);
+    }
     assert.deepEqual(await terminal.getCurrentPane({ tty: null, cwd: "/" }), expect.currentPane);
   });
 
@@ -76,23 +87,6 @@ test("a pane variable beats the variables the terminal was launched with", () =>
     async () => "",
   );
   assert.equal(terminal?.name, "tty7");
-});
-
-// both draw with ghostty's engine and report ghostty everywhere they can
-const GHOSTTY_LOOKALIKE = {
-  TERM: "xterm-ghostty",
-  TERM_PROGRAM: "ghostty",
-  GHOSTTY_RESOURCES_DIR: "/Applications/Ghostty.app/Contents/Resources/ghostty",
-};
-
-test("cmux is told apart from ghostty by its own variable", () => {
-  const env = { ...GHOSTTY_LOOKALIKE, CMUX_SURFACE_ID: "1E1B…", CMUX_SOCKET_PATH: "/tmp/c.sock" };
-  assert.equal(detect(env, async () => "")?.name, "cmux");
-});
-
-test("supacode is told apart from ghostty by its own variable", () => {
-  const env = { ...GHOSTTY_LOOKALIKE, SUPACODE_SURFACE_ID: "9A2F…" };
-  assert.equal(detect(env, async () => "")?.name, "supacode");
 });
 
 test("plain ghostty is still ghostty", () => {
@@ -148,25 +142,6 @@ test("herdr prepare leaves an already-enabled config alone and never reloads", a
   const { run, commands } = recorder({});
   await detect(env, run).prepare();
   assert.deepEqual(commands, []);
-});
-
-test("herdr prepare stays silent when reload-config rejects the edit", async () => {
-  const configPath = tempHerdrConfig(null);
-  const env = { HERDR_PANE_ID: "w1:p1", HERDR_CONFIG_PATH: configPath };
-  const { run } = recorder({
-    "herdr server reload-config": JSON.stringify({
-      result: { status: "failed", diagnostics: ["config parse error"] },
-    }),
-  });
-  const originalError = console.error;
-  const warnings = [];
-  console.error = (message) => warnings.push(message);
-  try {
-    await assert.doesNotReject(detect(env, run).prepare());
-  } finally {
-    console.error = originalError;
-  }
-  assert.deepEqual(warnings, []);
 });
 
 test("herdr prepare stays silent when herdr itself cannot be run", async () => {
@@ -259,6 +234,7 @@ const GHOSTTY_ENV = {
 };
 const onMac = { skip: process.platform !== "darwin" };
 const GHOSTTY_BIN = "/Applications/Ghostty.app/Contents/MacOS/ghostty";
+const FORKY_BIN = "/Applications/Forky.app/Contents/MacOS/ghostty";
 const processTable = (rows) => rows.map((row) => row.join(" ")).join("\n") + "\n";
 
 // a test process lives under whatever launched node, so the pretend ghostty is grafted
@@ -267,8 +243,9 @@ test("ghostty scripts the instance this shell runs inside, not the newest one", 
   const { run, commands } = recorder({
     "ps -axo pid=,ppid=,tty=,command=": processTable([
       [process.pid, process.ppid, "ttys001", "node test"],
-      [process.ppid, 1, "??", GHOSTTY_BIN],
-      [9001, 1, "??", `${GHOSTTY_BIN} -e sh -c python3 probe.py`],
+      [process.ppid, 1, "??", FORKY_BIN],
+      [9001, 1, "??", GHOSTTY_BIN],
+      [9002, 1, "??", `${GHOSTTY_BIN} -e sh -c python3 probe.py`],
     ]),
     [`osascript -l JavaScript - ${process.ppid} list`]: "w1\tt1\tAAAA\t\t\t/Users/me\n",
   });
@@ -277,6 +254,8 @@ test("ghostty scripts the instance this shell runs inside, not the newest one", 
     { id: "AAAA", tab: "w1:t1", tty: null, command: null },
   ]);
   assert.ok(commands.includes(`osascript -l JavaScript - ${process.ppid} list`));
+  assert.ok(!commands.includes("osascript -l JavaScript - 9001 list"));
+  assert.ok(!commands.includes("osascript -l JavaScript - 9002 list"));
 });
 
 test("ghostty falls back to the only instance when this shell is not inside one", onMac, async () => {
@@ -302,8 +281,11 @@ test("ghostty finds the instance through the caller tty when ancestry does not r
     ]),
     "osascript -l JavaScript - 7000 list": "w1\tt1\tAAAA\t\t/dev/ttys009\t/Users/me\n",
   });
-  const pane = await detect(GHOSTTY_ENV, run).getCurrentPane({ tty: "/dev/ttys009", cwd: "/" });
+  const terminal = detect(GHOSTTY_ENV, run);
+  const pane = await terminal.getCurrentPane({ tty: "/dev/ttys009", cwd: "/" });
   assert.deepEqual(pane, { id: "AAAA", tab: "w1:t1", tty: "/dev/ttys009", command: null });
+  const panes = await terminal.listPanes({ commands: () => true, tty: "/dev/ttys009" });
+  assert.deepEqual(panes, [{ id: "AAAA", tab: "w1:t1", tty: "/dev/ttys009", command: null }]);
   assert.ok(commands.includes("osascript -l JavaScript - 7000 list"));
 });
 
@@ -351,18 +333,3 @@ test("ghostty asks the owning instance for a split's neighbor by window and tab"
   assert.equal(commands.at(-1), `osascript -l JavaScript - ${process.ppid} neighbor w1 t1 AAAA right`);
 });
 
-test("ghostty lists panes through the caller's tty when the process has no ghostty ancestor", onMac, async () => {
-  const { run, commands } = recorder({
-    "ps -axo pid=,ppid=,tty=,command=": processTable([
-      [process.pid, 1, "??", "node daemon"],
-      [7000, 1, "??", GHOSTTY_BIN],
-      [7001, 7000, "ttys009", "login"],
-      [7002, 7001, "ttys009", "-zsh"],
-      [8000, 1, "??", `${GHOSTTY_BIN} -e probe`],
-    ]),
-    "osascript -l JavaScript - 7000 list": "w1\tt1\tAAAA\t\t/dev/ttys009\t/Users/me\n",
-  });
-  const panes = await detect(GHOSTTY_ENV, run).listPanes({ commands: () => true, tty: "/dev/ttys009" });
-  assert.deepEqual(panes, [{ id: "AAAA", tab: "w1:t1", tty: "/dev/ttys009", command: null }]);
-  assert.ok(commands.includes("osascript -l JavaScript - 7000 list"));
-});

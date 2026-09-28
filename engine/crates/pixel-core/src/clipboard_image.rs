@@ -139,10 +139,14 @@ fn percent_decode(s: &str) -> String {
 mod tests {
     use super::*;
 
-    fn temp_png(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join("pixel-clipboard-test");
+    fn temp_dir() -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("pixel-clipboard-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(name);
+        dir
+    }
+
+    fn temp_png(name: &str) -> PathBuf {
+        let path = temp_dir().join(name);
         image::RgbaImage::from_pixel(6, 4, image::Rgba([1, 2, 3, 255]))
             .save(&path)
             .unwrap();
@@ -157,32 +161,21 @@ mod tests {
     }
 
     #[test]
-    fn quoted_and_escaped_paths_normalize() {
+    fn quoted_escaped_and_file_url_paths_normalize() {
         let path = temp_png("with space.png");
         let raw = path.to_string_lossy();
         assert!(image_path_from_paste(&format!("'{raw}'")).is_some());
         assert!(image_path_from_paste(&raw.replace(' ', "\\ ")).is_some());
-    }
-
-    #[test]
-    fn file_urls_percent_decode() {
-        let path = temp_png("url space.png");
-        let url = format!("file://{}", path.to_string_lossy().replace(' ', "%20"));
+        let url = format!("file://{}", raw.replace(' ', "%20"));
         assert!(image_path_from_paste(&url).is_some());
     }
 
     #[test]
-    fn ordinary_text_is_not_a_path() {
+    fn ordinary_text_and_non_image_files_are_rejected() {
         assert!(image_path_from_paste("hello world").is_none());
         assert!(image_path_from_paste("/does/not/exist.png").is_none());
         assert!(image_path_from_paste("one\n/two.png").is_none());
-    }
-
-    #[test]
-    fn non_image_files_are_rejected() {
-        let dir = std::env::temp_dir().join("pixel-clipboard-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("notes.txt");
+        let path = temp_dir().join("notes.txt");
         std::fs::write(&path, "just text").unwrap();
         assert!(image_path_from_paste(&path.to_string_lossy()).is_none());
     }

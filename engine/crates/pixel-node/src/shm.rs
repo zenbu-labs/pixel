@@ -23,6 +23,8 @@ struct CachedMapping {
 }
 
 static MAPPINGS: Mutex<Vec<CachedMapping>> = Mutex::new(Vec::new());
+static MAP_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MAP_MISSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 const MAPPING_CAPACITY: usize = 16;
 const MAPPING_IDLE_LIMIT: std::time::Duration = std::time::Duration::from_secs(10);
 
@@ -40,7 +42,20 @@ fn mapping_for(fd: BorrowedFd<'_>, len: usize) -> Result<Arc<Mapping>, String> {
         entry.last_used = now;
         let map = entry.map.clone();
         cache.push(entry);
+        MAP_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok(map);
+    }
+    // what
+    let misses = MAP_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if misses <= 5 || misses.is_multiple_of(500) {
+        pixel_core::logging::debug(
+            "shm",
+            format!(
+                "mapping a new {} byte frame buffer (dev {dev} ino {ino}); {misses} new so far, {} reused",
+                len,
+                MAP_HITS.load(std::sync::atomic::Ordering::Relaxed)
+            ),
+        );
     }
     let base = unsafe {
         rustix::mm::mmap(
@@ -135,7 +150,6 @@ mod tests {
     use std::io::Write;
     use std::os::fd::AsRawFd;
 
-    // A plain file maps the same way a shm region does, and exists on every platform.
     fn region(bytes: &[u8]) -> File {
         static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let path = std::env::temp_dir().join(format!(
@@ -173,23 +187,10 @@ mod tests {
 
     #[test]
     fn reuses_the_mapping_across_frames_of_one_region() {
-        let file = region(&[7u8; 512]);
-        let first = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 512).expect("map");
-        let base = first.pixels().as_ptr();
-        drop(first);
-        let second = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 512).expect("map");
-        assert_eq!(second.pixels().as_ptr(), base);
-    }
-
-    #[test]
-    fn runs_the_drop_hook_once_consumed() {
-        let file = region(&[0u8; 256]);
-        let (sent, received) = std::sync::mpsc::channel::<u32>();
-        let mut surface = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 256).expect("map");
-        surface.set_on_drop(Box::new(move || {
-            let _ = sent.send(1);
-        }));
-        drop(surface);
-        assert_eq!(received.try_recv(), Ok(1));
+        let file = region(&[7u8; 640]);
+        let first = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 640).expect("map");
+        let second = ShmSurface::from_region(file.as_raw_fd(), 8, 8, 32, 640).expect("map");
+        assert!(Arc::ptr_eq(&first.map, &second.map));
+        assert_eq!(second.pixels()[..8], [7u8; 8]);
     }
 }

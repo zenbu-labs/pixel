@@ -273,17 +273,13 @@ mod tests {
         assert_eq!(mend("done. **"), "done.");
         assert_eq!(mend("done. ~~"), "done.");
         assert_eq!(mend("real `"), "real");
+        assert_eq!(mend("**a****"), "**a**");
     }
 
     #[test]
     fn trailing_space_is_stripped_so_closers_bind() {
         assert_eq!(mend("**bold "), "**bold**");
         assert_eq!(mend("**bold x "), "**bold x**");
-    }
-
-    #[test]
-    fn extra_closer_at_eof_is_hidden() {
-        assert_eq!(mend("**a****"), "**a**");
     }
 
     #[test]

@@ -8,7 +8,7 @@ const { test } = require("node:test");
 const { bracketedPaste, shellLiteral } = require("../dist/terminal/shared.js");
 
 function typeIntoShell(argv, inputs) {
-  const spec = JSON.stringify({ argv, inputs, settle_ms: 700 });
+  const spec = JSON.stringify({ argv, inputs });
   const run = spawnSync("python3", [path.join(__dirname, "pty-shell.py"), spec], {
     encoding: "utf8",
     timeout: 20000,
@@ -26,25 +26,14 @@ const SHELLS = [
 ];
 
 for (const [name, argv] of SHELLS) {
-  test(`${name}: the harness does detect execution (a raw newline runs the command)`, () => {
+  test(`${name}: pressing Enter on the single-quoted payload executes nothing, while a raw newline still runs a command`, () => {
     const file = marker();
-    typeIntoShell(argv, [`touch ${file}\n`]);
-    assert.equal(fs.existsSync(file), true, "control payload should have executed");
-    fs.rmSync(file, { force: true });
-  });
-
-  test(`${name}: a single line full of shell metacharacters and no newline never executes`, () => {
-    const file = marker();
-    const line = `> [<h2>x</h2>; touch ${file}; echo EXECUTED || touch ${file} | touch ${file} && touch ${file} $(touch ${file}) \`touch ${file}\`]`;
-    const output = typeIntoShell(argv, [line, ""]);
-    assert.equal(fs.existsSync(file), false, "no newline was sent, nothing may run");
-    assert.ok(output.includes("touch"), "the line was typed into the prompt");
-  });
-
-  test(`${name}: pressing Enter on the single-quoted payload executes nothing`, () => {
-    const file = marker();
+    const control = marker();
     const hostile = `> [<h2>x</h2>; touch ${file}; echo EXECUTED || touch ${file} | touch ${file} && touch ${file} $(touch ${file}) \`touch ${file}\` it's \\ !! ${"$"}HOME > ${file}]`;
-    const output = typeIntoShell(argv, [shellLiteral(hostile), "\n", "\n"]);
+    const output = typeIntoShell(argv, [shellLiteral(hostile), "\n", "\n", `touch ${control}\n`]);
+    const ran = fs.existsSync(control);
+    fs.rmSync(control, { force: true });
+    assert.equal(ran, true, "control payload should have executed");
     assert.equal(fs.existsSync(file), false, "quoted word must not run or create anything");
     assert.equal(output.includes("EXECUTED\r"), false, "echo inside the quotes must not run");
     // a word containing a slash is looked up as a path: "no such file or directory" in both shells

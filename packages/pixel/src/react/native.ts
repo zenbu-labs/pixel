@@ -23,7 +23,14 @@ export interface NativeEngine {
     height: number,
     damage?: DamageRect,
   ): void;
-  updateSurfaceTexture?(id: number, handle: Buffer, damage?: DamageRect): void;
+  updateSurfaceTexture?(
+    id: number,
+    handle: number,
+    damageX: number,
+    damageY: number,
+    damageWidth: number,
+    damageHeight: number,
+  ): void;
   updateSurfaceShm?(
     id: number,
     shm: SurfaceShm,

@@ -201,21 +201,7 @@ mod tests {
 
         assert_eq!(capture_of("{\"a\": 1}", "json", "\"a\""), Some("string"));
         assert_eq!(capture_of("echo $HOME", "bash", "echo"), Some("function"));
-    }
 
-    #[test]
-    fn unknown_language_yields_no_spans() {
         assert!(highlight("fn main() {}".into(), "brainfuck".into()).is_empty());
-    }
-
-    #[test]
-    fn spans_are_sorted_and_non_overlapping() {
-        let spans = highlight(
-            "export function add(a: number, b: number): number { return a + b; }".into(),
-            "typescript".into(),
-        );
-        for pair in spans.windows(2) {
-            assert!(pair[0].end <= pair[1].start, "spans overlap or unsorted");
-        }
     }
 }

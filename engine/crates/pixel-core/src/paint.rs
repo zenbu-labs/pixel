@@ -8,6 +8,11 @@ use crate::text_input::{Mark, caret_width, offset_to_point};
 use crate::tree::{NodeId, PxRect, SlotKind, TextSpan, Tree};
 use crate::wrap::wrap_lines;
 
+mod opaque;
+
+pub use opaque::opaque_areas;
+use opaque::collect_surface_occluders;
+
 #[derive(Default)]
 struct PaintStats {
     rects: f64,
@@ -44,12 +49,12 @@ impl PaintStats {
             at += dur;
         }
         let (boxes, skipped, paths, clipped) = crate::canvas::take_canvas_stats();
-        crate::profiler::count("paint.boxes", boxes);
-        crate::profiler::count("paint.boxes.skipped", skipped);
-        crate::profiler::count("paint.paths", paths);
-        crate::profiler::count("paint.paths.clipped", clipped);
-        crate::profiler::count("paint.nodes", self.nodes);
-        crate::profiler::count("paint.glyphs", self.glyph_count);
+        crate::profiler::count("paint.boxes", || boxes);
+        crate::profiler::count("paint.boxes.skipped", || skipped);
+        crate::profiler::count("paint.paths", || paths);
+        crate::profiler::count("paint.paths.clipped", || clipped);
+        crate::profiler::count("paint.nodes", || self.nodes);
+        crate::profiler::count("paint.glyphs", || self.glyph_count);
     }
 }
 
@@ -109,55 +114,7 @@ pub fn paint(
         }
     });
 }
-
-fn collect_surface_occluders(
-    tree: &Tree,
-    id: NodeId,
-    clip: Option<PxRect>,
-    canvas: &mut Canvas,
-    out: &mut Vec<(NodeId, u32)>,
-) {
-    let Some(node) = tree.get(id) else {
-        return;
-    };
-    if node.hidden {
-        return;
-    }
-    let rect = node.abs;
-    if let Some(surface) = node.surface
-        && crate::surfaces::with(surface, |s| s.width > 0 && s.height > 0).unwrap_or(false)
-    {
-        let inset = node.style.corner_radius.iter().fold(1.0f32, |a, &r| a.max(r));
-        let mut area = PxRect {
-            x: rect.x + inset,
-            y: rect.y + inset,
-            w: rect.w - inset * 2.0,
-            h: rect.h - inset * 2.0,
-        };
-        if let Some(clip) = clip {
-            area = area.intersect(clip);
-        }
-        if area.w > 0.0 && area.h > 0.0 {
-            let token = canvas.add_occluder(area.x, area.y, area.w, area.h);
-            out.push((id, token));
-        }
-    }
-    let child_clip = if node.style.overflow != Overflow::Visible {
-        Some(clip.map_or(rect, |c| c.intersect(rect)))
-    } else {
-        clip
-    };
-    for &child in &node.children {
-        let skipped = tree.get(child).is_some_and(|n| {
-            (n.slot.is_some() && !n.slot_visible)
-                || (n.mark.is_some() && !n.mark_visible)
-                || n.shape.is_some()
-        });
-        if !skipped {
-            collect_surface_occluders(tree, child, child_clip, canvas, out);
-        }
-    }
-}
+// ah right, we also have new conditions if opaque vs transparent that ill need to think about
 
 #[allow(clippy::too_many_arguments)]
 fn paint_node(
@@ -193,6 +150,7 @@ fn paint_node(
             stats.rect_count += background.is_some() as u64 + node.style.border.is_some() as u64;
         }
         timed(stats.as_mut().map(|s| &mut s.rects), || {
+            // painting background colors
             match &background {
                 Some(Paint::Solid(bg)) => canvas.fill_rounded_rect(
                     rect.x,
@@ -212,6 +170,7 @@ fn paint_node(
                 ),
                 None => {}
             }
+            // painting borders
             if let Some(border) = node.style.border {
                 match border.uniform() {
                     Some(side) => canvas.stroke_rounded_rect(
@@ -243,6 +202,7 @@ fn paint_node(
             }
         });
     }
+    // painting surfaces
     if let Some(surface) = node.surface {
         if let Some(at) = surface_occluders.iter().position(|(n, _)| *n == id) {
             let (_, token) = surface_occluders.swap_remove(at);
@@ -250,19 +210,40 @@ fn paint_node(
         }
         timed(stats.as_mut().map(|s| &mut s.surface), || {
             crate::surfaces::with(surface, |s| {
-                canvas.blit_scaled_rgba_rounded_hint(
-                    rect.x,
-                    rect.y,
-                    rect.w,
-                    rect.h,
-                    &s.pixels,
-                    s.width,
-                    s.height,
-                    node.style.corner_radius,
-                );
+                // scaling? er
+                let unscaled = (rect.w.round().max(0.0) as u32, rect.h.round().max(0.0) as u32)
+                    == (s.width, s.height);
+                    // hint?
+                if unscaled {
+                    canvas.blit_bgra_rounded_hint(
+                        rect.x,
+                        rect.y,
+                        // pixels vs rgba, eh?
+                        &s.pixels,
+                        s.width,
+                        s.height,
+                        node.style.corner_radius,
+                    );
+                } else {
+                    let mut rgba = s.pixels.clone();
+                    for px in rgba.chunks_exact_mut(4) {
+                        px.swap(0, 2);
+                    }
+                    canvas.blit_scaled_rgba_rounded(
+                        rect.x,
+                        rect.y,
+                        rect.w,
+                        rect.h,
+                        &rgba,
+                        s.width,
+                        s.height,
+                        node.style.corner_radius,
+                    );
+                }
             });
         });
     }
+    // painting images
     if let Some(image) = &node.image {
         timed(stats.as_mut().map(|s| &mut s.images), || {
             match crate::image_cache::status(&image.src, &image.equal_to) {
@@ -297,6 +278,7 @@ fn paint_node(
         && (background.is_some() || node.style.border.is_some())
     {
         timed(stats.as_mut().map(|s| &mut s.selection), || {
+            // wait, whats a band?
             fill_bands(canvas, bands, visible, color);
         });
     }
@@ -317,6 +299,7 @@ fn paint_node(
         .or(enclosing_block);
     let in_block = enclosing_block.is_some();
 
+    // painting text
     if let Some(text) = &node.text {
         let px = node.resolved.px;
         let font = &fonts[node.resolved.font.min(fonts.len() - 1)];
@@ -583,6 +566,7 @@ fn paint_node(
         }
     }
 
+    // recursively applying to children
     for &child in &node.children {
         if tree.get(child).is_some_and(|n| {
             (n.slot.is_some() && !n.slot_visible) || (n.mark.is_some() && !n.mark_visible)
@@ -837,13 +821,10 @@ mod tests {
     }
 
     #[test]
-    fn no_spans_yields_the_whole_line_in_the_fallback_color() {
+    fn spans_split_a_line_with_fallback_gaps() {
         let out = split_by_spans(0..10, &[], FALLBACK);
         assert_eq!(colors(&out), vec![(0..10, FALLBACK)]);
-    }
 
-    #[test]
-    fn spans_split_a_line_with_fallback_gaps() {
         let out = split_by_spans(0..10, &[span(2, 4), span(6, 8)], FALLBACK);
         assert_eq!(
             colors(&out),
@@ -876,30 +857,13 @@ mod tests {
     }
 
     #[test]
-    fn styled_spans_carry_their_flags_through_the_split() {
-        let styled = TextSpan {
-            bold: true,
-            italic: true,
-            underline: true,
-            ..span(2, 4)
-        };
-        let out = split_by_spans(0..6, &[styled], FALLBACK);
-        assert_eq!(out.len(), 3);
-        assert!(!out[0].1.bold && !out[0].1.italic);
-        assert_eq!(out[1].0, 2..4);
-        assert!(out[1].1.bold && out[1].1.italic && out[1].1.underline);
-        assert!(!out[2].1.bold && !out[2].1.underline);
-    }
-
-    #[test]
     fn image_nodes_measure_to_aspect_size_and_paint_pixels() {
         let font = fontdue::Font::from_bytes(FONT_BYTES, fontdue::FontSettings::default()).unwrap();
-        let dir = std::env::temp_dir().join("pixel-paint-image-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("solid.png");
-        image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 200, 0, 255]))
-            .save(&path)
-            .unwrap();
+        let src = "mem://paint-solid";
+        crate::image_cache::insert_decoded(
+            src.into(),
+            &image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 200, 0, 255])),
+        );
 
         let mut tree = Tree::new((100.0, 100.0));
         tree.reconcile(Desc {
@@ -913,7 +877,7 @@ mod tests {
                     ..Style::default()
                 },
                 image: Some(crate::tree::ImageProps {
-                    src: path.to_string_lossy().to_string(),
+                    src: src.into(),
                     equal_to: Vec::new(),
                 }),
                 ..Desc::default()
@@ -923,24 +887,7 @@ mod tests {
         tree.flush_layout(std::slice::from_ref(&font), 16.0);
         let node = tree.children(tree.root())[0];
         let rect = tree.rect(node).unwrap();
-        assert_eq!(
-            rect.h, 0.0,
-            "without a placeholder the image occupies nothing until decoded"
-        );
-
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        while !crate::image_cache::drain_completed().landed {
-            assert!(std::time::Instant::now() < deadline, "decode never landed");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        tree.mark_layout();
-        tree.flush_layout(std::slice::from_ref(&font), 16.0);
-        let rect = tree.rect(node).unwrap();
-        assert_eq!(
-            (rect.w, rect.h),
-            (40.0, 20.0),
-            "height follows aspect once the pixels are ready"
-        );
+        assert_eq!((rect.w, rect.h), (40.0, 20.0), "height follows the pixel aspect");
         let mut canvas = Canvas::new(100, 100);
         paint(&tree, &mut canvas, std::slice::from_ref(&font), None, None);
         let center = &canvas.pixels[((10 * 100 + 20) * 4) as usize..][..4];

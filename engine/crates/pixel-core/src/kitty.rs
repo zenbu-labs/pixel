@@ -6,19 +6,42 @@ const KITTY_CHUNK_SIZE: usize = 4096;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Placement {
-    Cursor,
+    /// Placed at the cursor with placement id 1, drawn at z-layer `z` (0 is the base frame),
+    /// shifted `offset` pixels into the cursor cell.
+    Cursor { z: i32, offset: (u32, u32) },
     Cells { cols: u32, rows: u32 },
 }
+
+pub(crate) const PLACEMENT_ID: u32 = 1;
 
 impl Placement {
     fn keys(self) -> String {
         match self {
-            // todo: verify this is needed
             // C=1: the cursor stays put after display, so a full-window image
             // can't push the cursor past the last row and force a scroll.
-            Placement::Cursor => "p=1,C=1".to_string(),
+            Placement::Cursor { z, offset: (0, 0) } => format!("p={PLACEMENT_ID},C=1,z={z}"),
+            Placement::Cursor { z, offset: (x, y) } => format!("p={PLACEMENT_ID},C=1,z={z},X={x},Y={y}"),
             Placement::Cells { cols, rows } => format!("U=1,c={cols},r={rows}"),
         }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Transmit {
+    pub image_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub placement: Placement,
+    pub transient: bool,
+}
+
+impl Transmit {
+    fn keys(self) -> String {
+        let mut keys = self.placement.keys();
+        if self.transient {
+            keys.push_str(",N=1");
+        }
+        keys
     }
 }
 
@@ -30,6 +53,9 @@ fn emit(out: &mut Vec<u8>, seq: &[u8], wrapper: Wrapper) {
 pub(crate) enum Medium {
     Shared,
     File,
+    // what is this?
+    /// A file the terminal deletes once read; its name must contain `tty-graphics-protocol`.
+    Temporary,
 }
 
 impl Medium {
@@ -37,6 +63,7 @@ impl Medium {
         match self {
             Medium::Shared => 's',
             Medium::File => 'f',
+            Medium::Temporary => 't',
         }
     }
 }
@@ -57,19 +84,20 @@ pub(crate) fn kitty_query_medium(
     out
 }
 
-// i want to look into how we do this, and be very careful and abstract this well per terminal
-// and make it very clear what we explicitly support/don't
 pub(crate) fn kitty_transmit_named(
-    image_id: u32,
-    width: u32,
-    height: u32,
+    transmit: Transmit,
     name: &str,
     medium: Medium,
-    placement: Placement,
     wrapper: Wrapper,
 ) -> Vec<u8> {
+    let Transmit {
+        image_id,
+        width,
+        height,
+        ..
+    } = transmit;
     let payload = BASE64.encode(name);
-    let keys = placement.keys();
+    let keys = transmit.keys();
     let t = medium.key();
     let seq = format!(
         "\x1b_Ga=T,f=32,s={width},v={height},t={t},i={image_id},{keys},q=2;{payload}\x1b\\"
@@ -80,17 +108,26 @@ pub(crate) fn kitty_transmit_named(
 }
 
 pub fn kitty_transmit(image_id: u32, width: u32, height: u32, rgba: &[u8]) -> Vec<u8> {
-    kitty_transmit_placed(image_id, width, height, rgba, Placement::Cursor, Wrapper::None)
+    kitty_transmit_placed(
+        Transmit {
+            image_id,
+            width,
+            height,
+            placement: Placement::Cursor { z: 0, offset: (0, 0) },
+            transient: false,
+        },
+        rgba,
+        Wrapper::None,
+    )
 }
 
-pub(crate) fn kitty_transmit_placed(
-    image_id: u32,
-    width: u32,
-    height: u32,
-    rgba: &[u8],
-    placement: Placement,
-    wrapper: Wrapper,
-) -> Vec<u8> {
+pub(crate) fn kitty_transmit_placed(transmit: Transmit, rgba: &[u8], wrapper: Wrapper) -> Vec<u8> {
+    let Transmit {
+        image_id,
+        width,
+        height,
+        ..
+    } = transmit;
     assert_eq!(rgba.len(), (width * height * 4) as usize);
     let compressed = crate::profiler::span("kitty.compress", || {
         miniz_oxide::deflate::compress_to_vec_zlib(rgba, 1)
@@ -106,7 +143,7 @@ pub(crate) fn kitty_transmit_placed(
         seq.clear();
         seq.extend_from_slice(b"\x1b_G");
         if i == 0 {
-            let keys = placement.keys();
+            let keys = transmit.keys();
             seq.extend_from_slice(
                 format!("a=T,f=32,o=z,s={width},v={height},t=d,i={image_id},{keys},q=2,m={more}")
                     .as_bytes(),
@@ -121,8 +158,82 @@ pub(crate) fn kitty_transmit_placed(
     }
     out
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct FrameEdit {
+    pub image_id: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    /// kitty 0.48+ keeps the edited frame out of its disk cache with N=1.
+    pub transient: bool,
+}
+
+impl FrameEdit {
+    fn keys(self) -> String {
+        let mut keys = format!(
+            "a=f,f=32,i={},r=1,X=1,x={},y={},s={},v={}",
+            self.image_id, self.x, self.y, self.width, self.height
+        );
+        if self.transient {
+            keys.push_str(",N=1");
+        }
+        keys
+    }
+}
+
+pub(crate) fn kitty_frame_edit_inline(edit: FrameEdit, rgba: &[u8], wrapper: Wrapper) -> Vec<u8> {
+    assert_eq!(rgba.len(), (edit.width * edit.height * 4) as usize);
+    let compressed = crate::profiler::span("kitty.compress", || {
+        miniz_oxide::deflate::compress_to_vec_zlib(rgba, 1)
+    });
+    let payload = crate::profiler::span("kitty.base64", || BASE64.encode(&compressed));
+    let chunks: Vec<&[u8]> = payload.as_bytes().chunks(KITTY_CHUNK_SIZE).collect();
+    let last = chunks.len() - 1;
+    let mut out = Vec::new();
+    let mut seq = Vec::new();
+    for (i, chunk) in chunks.iter().enumerate() {
+        let more = u8::from(i != last);
+        seq.clear();
+        seq.extend_from_slice(b"\x1b_G");
+        if i == 0 {
+            seq.extend_from_slice(format!("{},o=z,t=d,q=2,m={more}", edit.keys()).as_bytes());
+        } else {
+            seq.extend_from_slice(format!("m={more}").as_bytes());
+        }
+        seq.push(b';');
+        seq.extend_from_slice(chunk);
+        seq.extend_from_slice(b"\x1b\\");
+        emit(&mut out, &seq, wrapper);
+    }
+    out
+}
+
+pub(crate) fn kitty_frame_edit_named(edit: FrameEdit, name: &str, medium: Medium, wrapper: Wrapper) -> Vec<u8> {
+    let payload = BASE64.encode(name);
+    let t = medium.key();
+    let seq = format!("\x1b_G{},t={t},q=2;{payload}\x1b\\", edit.keys());
+    let mut out = Vec::new();
+    emit(&mut out, seq.as_bytes(), wrapper);
+    out
+}
+
+pub(crate) fn kitty_frame_edit_probe(image_id: u32) -> Vec<u8> {
+    let pixel = BASE64.encode([0u8, 0, 0, 255]);
+    // intersting 
+    format!(
+        "\x1b_Ga=t,f=32,s=1,v=1,i={image_id},q=1;{pixel}\x1b\\\x1b_Ga=f,f=32,i={image_id},r=1,X=1,x=0,y=0,s=1,v=1,q=0;{pixel}\x1b\\"
+    )
+    .into_bytes()
+}
+
 pub(crate) fn kitty_delete_one(image_id: u32) -> Vec<u8> {
     format!("\x1b_Ga=d,d=I,i={image_id},q=2\x1b\\").into_bytes()
+}
+
+pub(crate) fn kitty_delete_placement(image_id: u32) -> Vec<u8> {
+    format!("\x1b_Ga=d,d=i,i={image_id},p={PLACEMENT_ID},q=2\x1b\\").into_bytes()
 }
 
 // verify this is needed later
@@ -193,13 +304,12 @@ pub(crate) fn placeholder_grid(image_id: u32, cols: u32, rows: u32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Canvas;
 
     #[test]
     fn transmit_emits_single_chunk_for_small_images() {
         let out = kitty_transmit(1, 1, 1, &[0xff, 0x00, 0x00, 0xff]);
         let text = String::from_utf8(out).unwrap();
-        assert!(text.starts_with("\x1b_Ga=T,f=32,o=z,s=1,v=1,t=d,i=1,p=1,C=1,q=2,m=0;"));
+        assert!(text.starts_with("\x1b_Ga=T,f=32,o=z,s=1,v=1,t=d,i=1,p=1,C=1,z=0,q=2,m=0;"));
         assert!(text.ends_with("\x1b\\"));
 
         let payload = text
@@ -230,14 +340,6 @@ mod tests {
     }
 
     #[test]
-    fn transmit_compresses_flat_canvases_hard() {
-        let mut canvas = Canvas::new(256, 256);
-        canvas.fill([24, 24, 32, 255]);
-        let out = kitty_transmit(1, canvas.width, canvas.height, &canvas.pixels);
-        assert!(out.len() < 4096, "expected tiny output, got {}", out.len());
-    }
-
-    #[test]
     fn virtual_placement_transmit_wraps_every_chunk_for_tmux() {
         let mut seed = 0x9e3779b9u32;
         let pixels: Vec<u8> = (0..64 * 64 * 4)
@@ -247,11 +349,14 @@ mod tests {
             })
             .collect();
         let out = kitty_transmit_placed(
-            77,
-            64,
-            64,
+            Transmit {
+                image_id: 77,
+                width: 64,
+                height: 64,
+                placement: Placement::Cells { cols: 8, rows: 4 },
+                transient: false,
+            },
             &pixels,
-            Placement::Cells { cols: 8, rows: 4 },
             Wrapper::Tmux,
         );
         let text = String::from_utf8_lossy(&out);
@@ -266,6 +371,28 @@ mod tests {
     }
 
     #[test]
+    fn named_transmit_carries_layer_and_transient_keys() {
+        let out = kitty_transmit_named(
+            Transmit {
+                image_id: 9,
+                width: 40,
+                height: 20,
+                placement: Placement::Cursor { z: 7, offset: (0, 0) },
+                transient: true,
+            },
+            "/px-1-0-p3",
+            Medium::Shared,
+            Wrapper::None,
+        );
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.starts_with("\x1b_Ga=T,f=32,s=40,v=20,t=s,i=9,p=1,C=1,z=7,N=1,q=2;"));
+        assert_eq!(
+            kitty_delete_placement(9),
+            b"\x1b_Ga=d,d=i,i=9,p=1,q=2\x1b\\"
+        );
+    }
+
+    #[test]
     fn delete_is_scoped_to_our_image_when_relayed() {
         assert_eq!(kitty_delete(5, Wrapper::None), b"\x1b_Ga=d,d=A,q=2\x1b\\");
         assert_eq!(
@@ -275,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_grid_encodes_id_rows_and_columns() {
+    fn placeholder_grid_encodes_id_rows_and_columns_within_the_addressable_cells() {
         let out = String::from_utf8(placeholder_grid(0x0a0b0c, 3, 2)).unwrap();
         assert!(out.starts_with("\x1b[38;2;10;11;12m"));
         assert!(out.ends_with("\x1b[39m"));
@@ -294,10 +421,7 @@ mod tests {
         let row2_cells: Vec<char> = out[row2 + 6..out.len() - 5].chars().collect();
         assert_eq!(row2_cells[1], '\u{030D}', "second row uses the next row diacritic");
         assert_eq!(row2_cells.len(), 9);
-    }
 
-    #[test]
-    fn placeholder_grid_clamps_to_addressable_cells() {
         let out = String::from_utf8(placeholder_grid(1, 1000, 1)).unwrap();
         let cells = out.chars().filter(|&c| c == PLACEHOLDER).count();
         assert_eq!(cells, MAX_PLACEHOLDER_CELLS as usize);

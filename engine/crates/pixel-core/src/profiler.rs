@@ -175,22 +175,47 @@ pub fn emit_span(
     });
 }
 
-pub fn count(name: &'static str, value: u64) {
+pub fn cpu_us() -> Option<(u64, u64)> {
+    if !is_recording() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+        #[allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
+        let usage = unsafe {
+            libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts);
+            let mut usage: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &mut usage);
+            usage
+        };
+        let thread = ts.tv_sec as u64 * 1_000_000 + ts.tv_nsec as u64 / 1000;
+        let us = |t: libc::timeval| t.tv_sec as u64 * 1_000_000 + t.tv_usec as u64;
+        Some((thread, us(usage.ru_utime) + us(usage.ru_stime)))
+    }
+    #[cfg(not(unix))]
+    {
+        Some((0, 0))
+    }
+}
+
+pub fn count(name: &'static str, value: impl FnOnce() -> u64) {
     ACTIVE.with(|active| {
         if let Some(r) = active.borrow_mut().as_mut() {
             let at_ms = r.started.elapsed().as_secs_f64() * 1000.0;
+            let value = value();
             r.counters.push(CounterRecord { name, at_ms, value });
         }
     });
 }
 
-pub fn mark(name: &'static str, view: u32, label: String) {
+pub fn mark(name: &'static str, view: u32, label: impl FnOnce() -> String) {
     ACTIVE.with(|active| {
         if let Some(r) = active.borrow_mut().as_mut() {
             let start_ms = r.started.elapsed().as_secs_f64() * 1000.0;
             r.marks.push(MarkRecord {
                 name,
-                label,
+                label: label(),
                 start_ms,
                 dur_ms: 0.0,
                 view,
@@ -199,7 +224,7 @@ pub fn mark(name: &'static str, view: u32, label: String) {
     });
 }
 
-pub fn mark_or_extend(name: &'static str, view: u32, label: String, gap_ms: f64) {
+pub fn mark_or_extend(name: &'static str, view: u32, label: impl FnOnce() -> String, gap_ms: f64) {
     ACTIVE.with(|active| {
         if let Some(r) = active.borrow_mut().as_mut() {
             let now_ms = r.started.elapsed().as_secs_f64() * 1000.0;
@@ -209,12 +234,12 @@ pub fn mark_or_extend(name: &'static str, view: u32, label: String, gap_ms: f64)
                 && now_ms - (last.start_ms + last.dur_ms) < gap_ms
             {
                 last.dur_ms = now_ms - last.start_ms;
-                last.label = label;
+                last.label = label();
                 return;
             }
             r.marks.push(MarkRecord {
                 name,
-                label,
+                label: label(),
                 start_ms: now_ms,
                 dur_ms: 0.0,
                 view,
@@ -249,34 +274,16 @@ pub fn emit(name: &'static str, start_ms: f64, dur_ms: f64, arg: Option<u64>) {
     });
 }
 
-#[derive(Default)]
-pub struct Profiler;
-
-impl Profiler {
-    pub fn new() -> Self {
-        Self
-    }
-
-    pub fn is_recording(&self) -> bool {
-        is_recording()
-    }
-
-    pub fn toggle(&mut self) -> io::Result<Option<std::path::PathBuf>> {
-        if is_recording() {
-            let data = stop().expect("recording was active");
-            std::fs::create_dir_all("profiles")?;
-            let stamp = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_err(io::Error::other)?
-                .as_secs();
-            let path = std::path::PathBuf::from(format!("profiles/profile-{stamp}.json"));
-            std::fs::write(&path, report_json(&data))?;
-            Ok(Some(path))
-        } else {
-            start();
-            Ok(None)
-        }
-    }
+pub fn write_report(data: &ProfileData) -> io::Result<std::path::PathBuf> {
+    let dir = std::env::var("TERMINAL_BROWSER_PROFILE_DIR").unwrap_or_else(|_| "profiles".to_string());
+    std::fs::create_dir_all(&dir)?;
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs();
+    let path = std::path::PathBuf::from(format!("{dir}/profile-{stamp}.json"));
+    std::fs::write(&path, report_json(data))?;
+    Ok(path)
 }
 
 fn report_json(data: &ProfileData) -> String {
@@ -330,14 +337,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn spans_nest_with_depth_and_offsets() {
+    fn spans_nest_while_recording_and_still_run_outside_one() {
         start();
         span("outer", || {
             span("inner", || {
                 std::thread::sleep(std::time::Duration::from_millis(1))
             });
         });
-        count("items", 3);
+        count("items", || 3);
         let data = stop().unwrap();
         assert!(!is_recording());
         assert_eq!(data.spans.len(), 2);
@@ -349,10 +356,6 @@ mod tests {
         assert!(outer.start_ms <= inner.start_ms);
         assert_eq!(data.counters[0].name, "items");
         assert!(data.epoch_ms > 0.0);
-    }
-
-    #[test]
-    fn spans_outside_a_recording_still_run() {
         assert_eq!(span("idle", || 7), 7);
     }
 

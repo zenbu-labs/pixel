@@ -216,6 +216,20 @@ mod tests {
         let lines = wrap_lines("", &f, 16.0, Some(100.0), &[]);
         assert_eq!(lines, vec![0..0]);
     }
+
+    #[test]
+    fn ellipsize_cuts_to_width_and_marks_the_cut() {
+        let f = font();
+        let full = "GitHub - zenbu-labs";
+        let whole = measure_text(&f, full, 16.0);
+        assert_eq!(ellipsize(full, &f, 16.0, whole), None);
+        let room = measure_text(&f, "GitHub - zen", 16.0);
+        let cut = ellipsize(full, &f, 16.0, room).expect("too wide, so cut");
+        assert!(cut.ends_with('\u{2026}') || cut.ends_with("..."), "{cut}");
+        assert!(cut.starts_with("GitHub"), "{cut}");
+        assert!(measure_text(&f, &cut, 16.0) <= room, "{cut} does not fit");
+        assert!(cut.len() < full.len());
+    }
 }
 
 // Cuts a single line to fit `max_width` and ends it with an ellipsis, so a

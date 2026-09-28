@@ -131,11 +131,19 @@ fn sniff_dims(src: &str) -> Option<(u32, u32)> {
         .ok()
 }
 
-const RETRY_DELAYS: [Duration; 3] = [
-    Duration::from_millis(100),
-    Duration::from_millis(300),
-    Duration::from_millis(900),
-];
+const RETRY_DELAYS: [Duration; 3] = if cfg!(test) {
+    [
+        Duration::from_millis(1),
+        Duration::from_millis(3),
+        Duration::from_millis(9),
+    ]
+} else {
+    [
+        Duration::from_millis(100),
+        Duration::from_millis(300),
+        Duration::from_millis(900),
+    ]
+};
 
 fn decode_with_retries(src: &str) -> (Option<tiny_skia::Pixmap>, u32) {
     let mut attempts = 0;
@@ -429,8 +437,8 @@ pub(crate) fn image_size(src: &str, equal_to: &[String]) -> Option<(u32, u32)> {
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) fn with_image<R>(src: &str, f: impl FnOnce(tiny_skia::PixmapRef<'_>) -> R) -> Option<R> {
+#[cfg(test)]
+fn with_image<R>(src: &str, f: impl FnOnce(tiny_skia::PixmapRef<'_>) -> R) -> Option<R> {
     CACHE.with_borrow_mut(|cache| {
         ensure(cache, src, &[]);
         match &cache.entries[src].state {
@@ -519,7 +527,7 @@ pub(crate) fn with_scaled_image<R>(
     })
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub(crate) fn insert_decoded(src: String, img: &image::RgbaImage) {
     let Some(pixmap) = crate::profiler::span_labeled(
         "image.premultiply",
@@ -724,28 +732,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn size_is_known_before_decode_and_survives_deletion() {
-        let dir = std::env::temp_dir().join("pixel-image-cache-test");
+    fn temp_png(name: &str, img: &image::RgbaImage) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("pixel-image-cache-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("checker.png");
-        checker(4, 2).save(&path).unwrap();
-        let src = path.to_string_lossy().to_string();
-        assert_eq!(image_size(&src, &[]), Some((4, 2)));
-        drain_until_landed();
-        std::fs::remove_file(&path).unwrap();
-        // Still cached after the file is gone.
-        assert_eq!(image_size(&src, &[]), Some((4, 2)));
-        assert_eq!(status(&src, &[]), ImageStatus::Ready);
+        let path = dir.join(name);
+        img.save(&path).unwrap();
+        path
     }
 
     #[test]
-    fn decode_is_async_and_lands_via_drain() {
-        let dir = std::env::temp_dir().join("pixel-image-cache-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("async.png");
-        checker(3, 3).save(&path).unwrap();
+    fn size_is_known_before_the_async_decode_lands_and_survives_deletion() {
+        let path = temp_png("checker.png", &checker(4, 2));
         let src = path.to_string_lossy().to_string();
+        assert_eq!(image_size(&src, &[]), Some((4, 2)));
         assert_eq!(status(&src, &[]), ImageStatus::Pending);
         assert!(with_image(&src, |_| ()).is_none());
         drain_until_landed();
@@ -753,6 +752,8 @@ mod tests {
         let alpha_seen = with_image(&src, |p| p.pixels().iter().any(|px| px.alpha() < 255));
         assert_eq!(alpha_seen, Some(true));
         std::fs::remove_file(&path).unwrap();
+        assert_eq!(image_size(&src, &[]), Some((4, 2)), "still cached after the file is gone");
+        assert_eq!(status(&src, &[]), ImageStatus::Ready);
     }
 
     #[test]
@@ -767,54 +768,48 @@ mod tests {
 
     #[test]
     fn drain_emits_lifecycle_spans_while_recording() {
-        let dir = std::env::temp_dir().join("pixel-image-cache-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("profiled.png");
-        checker(5, 4).save(&path).unwrap();
+        let path = temp_png("profiled.png", &checker(5, 4));
         let src = path.to_string_lossy().to_string();
+        let wait_span = |data: &crate::profiler::ProfileData| {
+            data.spans
+                .iter()
+                .find(|s| s.name == "image.wait")
+                .cloned()
+                .expect("wait span")
+        };
+
         crate::profiler::start();
         assert_eq!(status(&src, &[]), ImageStatus::Pending);
+        emit_pending_waits();
+        let in_flight = crate::profiler::stop().unwrap();
+        assert!(in_flight.spans.iter().any(|s| s.name == "image.sniff"));
+        let wait = wait_span(&in_flight);
+        assert!(
+            wait.label.as_deref().unwrap().contains("still decoding"),
+            "{:?}",
+            wait.label
+        );
+
+        crate::profiler::start();
         drain_until_landed();
         emit_pending_waits();
-        let data = crate::profiler::stop().unwrap();
+        let landed = crate::profiler::stop().unwrap();
         std::fs::remove_file(&path).unwrap();
-        assert!(data.spans.iter().any(|s| s.name == "image.sniff"));
-        let wait = data
-            .spans
-            .iter()
-            .find(|s| s.name == "image.wait")
-            .expect("wait span");
+        let wait = wait_span(&landed);
         let label = wait.label.as_deref().expect("wait label");
         assert!(label.contains("profiled.png") && label.contains("5×4"), "{label}");
-        let decode = data
+        let decode = landed
             .spans
             .iter()
             .find(|s| s.name == "image.decode")
             .expect("decode span");
         assert_eq!(decode.arg, wait.arg);
         assert!(wait.dur_ms >= decode.dur_ms);
-        // The image landed, so nothing should report as still decoding.
-        assert!(!data.spans.iter().any(|s| {
-            s.label.as_deref().is_some_and(|l| l.contains("still decoding"))
-        }));
-    }
-
-    #[test]
-    fn stopping_a_recording_reports_in_flight_images() {
-        let src = "/nonexistent/slow.png";
-        crate::profiler::start();
-        assert_eq!(status(src, &[]), ImageStatus::Pending);
-        emit_pending_waits();
-        let data = crate::profiler::stop().unwrap();
-        let wait = data
-            .spans
-            .iter()
-            .find(|s| s.name == "image.wait")
-            .expect("pending wait span");
         assert!(
-            wait.label.as_deref().unwrap().contains("still decoding"),
-            "{:?}",
-            wait.label
+            !landed.spans.iter().any(|s| {
+                s.label.as_deref().is_some_and(|l| l.contains("still decoding"))
+            }),
+            "the image landed, so nothing is still decoding"
         );
     }
 
@@ -850,13 +845,4 @@ mod tests {
         assert_eq!(status("/nonexistent/other.png", &missing), ImageStatus::Pending);
     }
 
-    #[test]
-    fn insert_decoded_serves_without_a_file() {
-        let img = checker(3, 3);
-        insert_decoded("mem://test".into(), &img);
-        assert_eq!(image_size("mem://test", &[]), Some((3, 3)));
-        assert_eq!(status("mem://test", &[]), ImageStatus::Ready);
-        let alpha_seen = with_image("mem://test", |p| p.pixels().iter().any(|px| px.alpha() < 255));
-        assert_eq!(alpha_seen, Some(true));
-    }
 }

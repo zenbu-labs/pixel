@@ -14,6 +14,7 @@ import {
 import { DevtoolsApp } from "./app";
 import {
   devtoolsStore,
+  engineLogs,
   inspectorStore,
   pendingSpans,
   ProfileSession,
@@ -63,12 +64,15 @@ export function openDevtools(selectId?: number) {
   mountDevtools();
   devtoolsStore.update((s) => ({ ...s, open: true }));
   if (selectId != null) selectNode(selectId, true);
+  engineOp({ op: "setLogCapture", on: true });
   engineOp({ op: "setSplit", fraction: DEFAULT_SPLIT });
 }
 
 export function closeDevtools() {
   devtoolsStore.update((s) => ({ ...s, open: false }));
   setHighlight(null);
+  engineOp({ op: "setLogCapture", on: false });
+  engineLogs.clear();
   engineOp({ op: "setSplit", fraction: null });
 }
 
@@ -146,6 +150,16 @@ export function toggleExpanded(id: number) {
 export function setCpuThrottle(rate: number) {
   devtoolsStore.update((s) => ({ ...s, cpuRate: rate }));
   engineOp({ op: "setCpuThrottle", rate });
+}
+
+export function setMaxFps(fps: number) {
+  devtoolsStore.update((s) => ({ ...s, maxFps: fps }));
+  engineOp({ op: "setRender", maxFps: fps });
+}
+
+export function setHighlightTransmits(on: boolean) {
+  devtoolsStore.update((s) => ({ ...s, highlightTransmits: on }));
+  engineOp({ op: "setRender", highlightTransmits: on });
 }
 
 export function requestLayout() {

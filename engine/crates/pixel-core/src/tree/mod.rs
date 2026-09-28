@@ -225,6 +225,7 @@ pub(crate) struct RNode {
     pub text: Option<String>,
     pub key: Option<String>,
     pub clickable: bool,
+    // eh?
     pub hidden: bool,
     pub input: Option<InputState>,
     pub image: Option<ImageProps>,
@@ -290,6 +291,7 @@ pub struct Tree {
     needs_layout: bool,
     needs_place: bool,
     needs_paint: bool,
+    changed_surfaces: Vec<u32>,
 }
 
 pub(crate) const DEFAULT_RESOLVED: Resolved = Resolved {
@@ -322,6 +324,7 @@ impl Tree {
             needs_layout: true,
             needs_place: true,
             needs_paint: true,
+            changed_surfaces: Vec::new(),
         };
         let root = tree.create(Props {
             style: Style {
@@ -390,6 +393,11 @@ impl Tree {
     }
 
     pub fn create(&mut self, props: Props) -> NodeId {
+        // A node born showing a webview is a swap from nothing, and the presenter needs to
+        // hear about it the same way: as changed pixels, since no browser damage will say so.
+        if let Some(surface) = props.surface {
+            self.changed_surfaces.push(surface);
+        }
         let taffy = self
             .taffy
             .new_leaf(to_taffy(&props.style, props.hidden, props.input.is_some()))
@@ -593,6 +601,7 @@ impl Tree {
             node.spans = props.spans;
             changed = true;
         }
+        let mut swapped_surface = None;
         let mut image_changed = false;
         if node.image != props.image {
             node.image = props.image;
@@ -601,6 +610,7 @@ impl Tree {
         }
         if node.surface != props.surface {
             node.surface = props.surface;
+            swapped_surface = props.surface;
             changed = true;
         }
         let slot_changed = node.slot != props.slot;
@@ -728,6 +738,9 @@ impl Tree {
         }
         if let Some(value) = controlled_text {
             self.set_input_text(id, &value);
+        }
+        if let Some(surface) = swapped_surface {
+            self.changed_surfaces.push(surface);
         }
         if changed {
             self.needs_paint = true;
@@ -878,6 +891,14 @@ impl Tree {
             .map(|node| (node.abs, node.visible))
     }
 
+    pub(crate) fn take_changed_surfaces(&mut self) -> Vec<u32> {
+        std::mem::take(&mut self.changed_surfaces)
+    }
+
+    pub(crate) fn mark_surface_changed(&mut self, surface: u32) {
+        self.changed_surfaces.push(surface);
+    }
+
     pub(crate) fn mark_paint(&mut self) {
         self.needs_paint = true;
     }
@@ -990,17 +1011,13 @@ impl Tree {
             } else {
                 None
             }
-        } else if let Some(text) = text {
-            Some(MeasureCtx::Text {
+        } else { text.map(|text| MeasureCtx::Text {
                 text,
                 px: resolved.px,
                 font: resolved.font,
                 wrap,
                 marks,
-            })
-        } else {
-            None
-        };
+            }) };
         if self.taffy.get_node_context(taffy) != want.as_ref() {
             self.taffy
                 .set_node_context(taffy, want)
@@ -1143,6 +1160,13 @@ impl Tree {
             h: layout.size.height,
         };
         let visible = clip.map_or(rect, |c| rect.intersect(c));
+        let moved_surface = {
+            let node = self.node(id);
+            node.surface.filter(|_| node.abs != rect || node.visible != visible)
+        };
+        if let Some(surface) = moved_surface {
+            self.changed_surfaces.push(surface);
+        }
         let node = self.node_mut(id);
         node.abs = rect;
         node.visible = visible;

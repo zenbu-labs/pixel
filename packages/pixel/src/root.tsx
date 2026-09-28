@@ -6,7 +6,7 @@ import { pathToFileURL } from "node:url";
 import { createRef } from "react";
 import type { ReactNode } from "react";
 
-import { app } from "electron";
+import { app, screen } from "electron";
 
 import { debug } from "./debug";
 import { Shell } from "./host/shell";
@@ -387,6 +387,11 @@ export function createRoot(options: RootOptions = {}): Root {
       shutdown(code);
     },
   };
+
+  try {
+    const hz = screen.getPrimaryDisplay().displayFrequency;
+    if (hz > 0) engineRoot.setRender({ maxFps: hz });
+  } catch {}
   liveRoots.add(root);
   return root;
 }

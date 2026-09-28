@@ -33,6 +33,21 @@ fn pixel(canvas: &Canvas, x: u32, y: u32) -> [u8; 4] {
     canvas.pixels[i..i + 4].try_into().unwrap()
 }
 
+fn decode_signal() -> std::sync::mpsc::Receiver<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    crate::image_cache::set_waker(move || {
+        let _ = tx.send(());
+    });
+    rx
+}
+
+fn wait_for_decode(signal: &std::sync::mpsc::Receiver<()>) {
+    signal
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("decode never landed");
+    assert!(crate::image_cache::drain_completed().landed);
+}
+
 #[test]
 fn hit_click_prefers_the_topmost_clickable_and_falls_back_to_ancestors() {
     let tree = tree_of(
@@ -126,29 +141,7 @@ fn pointer_hit_stops_at_a_drag_surface_drawn_over_it() {
 }
 
 #[test]
-fn exposes_rects_by_key_and_paints_background() {
-    let mut tree = tree_of(
-        (100.0, 40.0),
-        vec![Desc {
-            style: Style {
-                width: Dimension::Px(100.0),
-                height: Dimension::Px(40.0),
-                background: Some(Paint::Solid([10, 20, 30, 255])),
-                ..Style::default()
-            },
-            key: Some("panel".into()),
-            ..Desc::default()
-        }],
-    );
-    let rect = tree.rect(tree.find("panel").unwrap()).unwrap();
-    assert_eq!((rect.w, rect.h), (100.0, 40.0));
-    assert!(tree.find("missing").is_none());
-    let canvas = painted(&mut tree, (100, 40), None);
-    assert_eq!(pixel(&canvas, 12, 0), [10, 20, 30, 255]);
-}
-
-#[test]
-fn hover_swaps_background_under_cursor() {
+fn nodes_are_found_by_key_and_hover_swaps_their_background() {
     let block = || Desc {
         style: Style {
             width: Dimension::Px(10.0),
@@ -157,9 +150,13 @@ fn hover_swaps_background_under_cursor() {
             hover_background: Some([9, 9, 9, 255]),
             ..Style::default()
         },
+        key: Some("panel".into()),
         ..Desc::default()
     };
     let mut tree = tree_of((10.0, 10.0), vec![block()]);
+    let rect = tree.rect(tree.find("panel").unwrap()).unwrap();
+    assert_eq!((rect.w, rect.h), (10.0, 10.0));
+    assert!(tree.find("missing").is_none());
     let canvas = painted(&mut tree, (10, 10), Some((5.0, 5.0)));
     assert_eq!(pixel(&canvas, 0, 0), [9, 9, 9, 255]);
     assert!(tree.hover_at(5.0, 5.0).is_some());
@@ -322,7 +319,6 @@ fn editor(initial: &str) -> Vec<Desc> {
 fn input_nodes_paint_caret_and_selection_and_expose_geometry() {
     let mut tree = tree_of((200.0, 60.0), editor("hello"));
     let id = tree.find("in").unwrap();
-    tree.set_focus(Some(id));
     tree.input_mut(id).unwrap().set_cursor(2, false);
     tree.mark_paint();
 
@@ -330,11 +326,16 @@ fn input_nodes_paint_caret_and_selection_and_expose_geometry() {
     assert_eq!(geometry.origin, (4.0, 4.0), "origin is inside the padding");
     let fonts = [font()];
     let caret = geometry.caret_rect("hello", &[], 2, &fonts);
-    let canvas = painted(&mut tree, (200, 60), None);
     let center = (
         (caret.x + caret.w / 2.0) as u32,
         (caret.y + caret.h / 2.0) as u32,
     );
+    let canvas = painted(&mut tree, (200, 60), None);
+    let [r, g, b, _] = pixel(&canvas, center.0, center.1);
+    assert_ne!([r, g, b], [255, 0, 0], "no caret without focus");
+
+    tree.set_focus(Some(id));
+    let canvas = painted(&mut tree, (200, 60), None);
     let [r, g, b, _] = pixel(&canvas, center.0, center.1);
     assert_eq!([r, g, b], [255, 0, 0], "caret painted");
     assert_eq!(
@@ -378,23 +379,6 @@ fn input_submit_prop_tracks_updates() {
 }
 
 #[test]
-fn caret_only_paints_on_the_focused_input() {
-    let mut tree = tree_of((200.0, 60.0), editor("hello"));
-    let id = tree.find("in").unwrap();
-    tree.input_mut(id).unwrap().set_cursor(2, false);
-    tree.mark_paint();
-    let geometry = tree.input_geometry(id).unwrap();
-    let caret = geometry.caret_rect("hello", &[], 2, &[font()]);
-    let canvas = painted(&mut tree, (200, 60), None);
-    let [r, g, b, _] = pixel(
-        &canvas,
-        (caret.x + caret.w / 2.0) as u32,
-        (caret.y + caret.h / 2.0) as u32,
-    );
-    assert_ne!([r, g, b], [255, 0, 0], "no caret without focus");
-}
-
-#[test]
 fn scroll_reveal_targets_the_nearest_edge() {
     let tree = tree_of((40.0, 40.0), scroller(false));
     let area = ScrollArea {
@@ -421,21 +405,7 @@ fn scroll_reveal_targets_the_nearest_edge() {
 }
 
 #[test]
-fn text_leaves_size_the_layout() {
-    let tree = tree_of(
-        (400.0, 100.0),
-        vec![Desc {
-            key: Some("label".into()),
-            text: Some("hello".into()),
-            ..Desc::default()
-        }],
-    );
-    let label = tree.rect(tree.find("label").unwrap()).unwrap();
-    assert!(label.w > 0.0 && label.h > 0.0);
-}
-
-#[test]
-fn updating_text_relayouts_the_leaf() {
+fn text_leaves_size_the_layout_and_relayout_when_text_changes() {
     let mut tree = tree_of(
         (400.0, 100.0),
         vec![Desc {
@@ -446,6 +416,7 @@ fn updating_text_relayouts_the_leaf() {
     );
     let id = tree.find("label").unwrap();
     let before = tree.rect(id).unwrap();
+    assert!(before.w > 0.0 && before.h > 0.0);
     tree.reconcile(Desc {
         children: vec![Desc {
             key: Some("label".into()),
@@ -760,9 +731,8 @@ fn hidden_nodes_zero_their_rects() {
 }
 
 #[test]
-fn content_height_overrides_measured_scroll_range() {
-    let mut tree = tree_of(
-        (100.0, 200.0),
+fn scroll_range_follows_content_height_and_no_overflow_hides_the_bar() {
+    let virtual_list = |content_height: Option<f32>| {
         vec![Desc {
             style: Style {
                 width: Dimension::Px(100.0),
@@ -771,7 +741,7 @@ fn content_height_overrides_measured_scroll_range() {
                 ..Style::default()
             },
             key: Some("virtual".into()),
-            content_height: Some(800.0),
+            content_height,
             children: vec![Desc {
                 style: Style {
                     height: Dimension::Px(30.0),
@@ -781,9 +751,17 @@ fn content_height_overrides_measured_scroll_range() {
                 ..Desc::default()
             }],
             ..Desc::default()
-        }],
-    );
+        }]
+    };
+    let mut tree = tree_of((100.0, 200.0), virtual_list(None));
     let id = tree.find("virtual").unwrap();
+    assert!(tree.scrollbar_rects(id).is_none(), "no overflow, no bar");
+
+    tree.reconcile(Desc {
+        children: virtual_list(Some(800.0)),
+        ..Desc::default()
+    });
+    tree.flush_layout(&[font()], 16.0);
     assert_eq!(
         tree.scroll_max(id),
         600.0,
@@ -813,33 +791,6 @@ fn content_height_overrides_measured_scroll_range() {
         0.0,
         "thumb position maps back to scroll offsets"
     );
-}
-
-#[test]
-fn scrollbar_rects_absent_without_overflow() {
-    let tree = tree_of(
-        (100.0, 200.0),
-        vec![Desc {
-            style: Style {
-                width: Dimension::Px(100.0),
-                height: Dimension::Px(200.0),
-                overflow: Overflow::Scroll,
-                ..Style::default()
-            },
-            key: Some("fits".into()),
-            children: vec![Desc {
-                style: Style {
-                    height: Dimension::Px(30.0),
-                    flex_shrink: 0.0,
-                    ..Style::default()
-                },
-                ..Desc::default()
-            }],
-            ..Desc::default()
-        }],
-    );
-    let id = tree.find("fits").unwrap();
-    assert!(tree.scrollbar_rects(id).is_none(), "no overflow, no bar");
 }
 
 #[test]
@@ -980,7 +931,7 @@ fn point_at(tree: &Tree, id: NodeId, offset: usize, fonts: &[fontdue::Font]) -> 
 }
 
 #[test]
-fn doc_selection_spans_text_nodes() {
+fn doc_selection_spans_text_nodes_in_document_order() {
     let fonts = [font()];
     let mut tree = tree_of((400.0, 200.0), labels("first line", "second line"));
     let a = tree.find("a").unwrap();
@@ -991,17 +942,14 @@ fn doc_selection_spans_text_nodes() {
     assert_eq!(tree.doc_selection_range(a), Some(6..10));
     assert_eq!(tree.doc_selection_range(b), Some(0..6));
     assert_eq!(tree.doc_selected_text().as_deref(), Some("line\nsecond"));
-}
+    assert!(
+        tree.doc_selection_blocks(&fonts).is_empty(),
+        "no bands without a unified ancestor"
+    );
 
-#[test]
-fn backwards_drags_normalize_by_document_order() {
-    let fonts = [font()];
-    let mut tree = tree_of((400.0, 200.0), labels("first line", "second line"));
-    let a = tree.find("a").unwrap();
-    let b = tree.find("b").unwrap();
     assert!(tree.doc_select_down(point_at(&tree, b, 6, &fonts), &fonts));
     tree.doc_select_drag(point_at(&tree, a, 6, &fonts), &fonts);
-    assert_eq!(tree.doc_selection_range(a), Some(6..10));
+    assert_eq!(tree.doc_selection_range(a), Some(6..10), "backwards drag");
     assert_eq!(tree.doc_selection_range(b), Some(0..6));
 }
 
@@ -1377,17 +1325,6 @@ fn unified_selection_on_one_line_is_a_single_tight_band() {
 }
 
 #[test]
-fn selections_without_a_unified_ancestor_have_no_bands() {
-    let fonts = [font()];
-    let mut tree = tree_of((400.0, 200.0), labels("first", "second"));
-    let a = tree.find("a").unwrap();
-    tree.doc_select_down(point_at(&tree, a, 0, &fonts), &fonts);
-    tree.doc_select_drag(point_at(&tree, a, 4, &fonts), &fonts);
-    assert!(tree.doc_selected_text().is_some());
-    assert!(tree.doc_selection_blocks(&fonts).is_empty());
-}
-
-#[test]
 fn blocks_render_even_when_the_selection_starts_outside() {
     let fonts = [font()];
     let mut wrap = labels("first", "second");
@@ -1576,6 +1513,7 @@ fn placeholder_slot_fills_the_image_rect_until_the_decode_lands() {
     image::RgbaImage::from_pixel(4, 2, image::Rgba([0, 200, 0, 255]))
         .save(&path)
         .unwrap();
+    let decoded = decode_signal();
     let mut tree = tree_of(
         (200.0, 100.0),
         vec![Desc {
@@ -1624,11 +1562,7 @@ fn placeholder_slot_fills_the_image_rect_until_the_decode_lands() {
     let canvas = painted(&mut tree, (200, 100), None);
     assert_eq!(pixel(&canvas, 20, 10), [50, 50, 50, 255]);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !crate::image_cache::drain_completed().landed {
-        assert!(std::time::Instant::now() < deadline, "decode never landed");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    wait_for_decode(&decoded);
     tree.mark_place();
     let canvas = painted(&mut tree, (200, 100), None);
     assert_eq!(tree.rect(ph).unwrap(), PxRect::ZERO, "placeholder retires");
@@ -1755,8 +1689,6 @@ fn static_text_marks_place_widgets_like_inputs() {
 
     // Painting draws the widget background at its inline position.
     let mut painted_tree = tree;
-    let widget_bg = painted_tree.find("w");
-    let _ = widget_bg;
     painted_tree.update(
         widget,
         Props {
@@ -1781,6 +1713,7 @@ fn static_text_marks_place_widgets_like_inputs() {
 #[test]
 fn failed_image_with_unknown_dims_occupies_a_square() {
     let fonts = [font()];
+    let decoded = decode_signal();
     let mut tree = Tree::new((300.0, 200.0));
     let row = tree.create(Props {
         style: Style {
@@ -1804,11 +1737,7 @@ fn failed_image_with_unknown_dims_occupies_a_square() {
     tree.append(row, image);
     tree.flush_layout(&fonts, 16.0);
 
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-    while !crate::image_cache::drain_completed().landed {
-        assert!(std::time::Instant::now() < deadline, "decode never settled");
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
+    wait_for_decode(&decoded);
     tree.mark_layout();
     tree.flush_layout(&fonts, 16.0);
     let rect = tree.rect(image).unwrap();
@@ -1847,7 +1776,7 @@ fn unwrapped_input(initial: &str) -> Vec<Desc> {
 }
 
 #[test]
-fn input_scroll_x_shifts_geometry_and_hit_testing() {
+fn input_scroll_x_shifts_geometry_and_hit_testing_until_blur_resets_it() {
     let text = "hello world wide";
     let mut tree = tree_of((60.0, 30.0), unwrapped_input(text));
     let id = tree.find("in").unwrap();
@@ -1864,16 +1793,14 @@ fn input_scroll_x_shifts_geometry_and_hit_testing() {
         5,
         "clicks map to the same offset under scroll"
     );
-}
 
-#[test]
-fn blur_resets_input_scroll_x() {
-    let mut tree = tree_of((60.0, 30.0), unwrapped_input("hello world wide"));
-    let id = tree.find("in").unwrap();
     tree.set_focus(Some(id));
-    tree.input_mut(id).unwrap().set_scroll_x(12.0);
     tree.set_focus(None);
-    assert_eq!(tree.input(id).unwrap().scroll_x(), 0.0);
+    assert_eq!(
+        tree.input(id).unwrap().scroll_x(),
+        0.0,
+        "blur resets scroll"
+    );
 }
 
 #[test]
@@ -1906,20 +1833,5 @@ fn unwrapped_input_does_not_grow_past_its_flex_width() {
     let id = tree.find("in").unwrap();
     let width = tree.content_width(id).unwrap();
     assert!(width <= 100.0, "input clamped to the row, got {width}");
-}
-
-#[test]
-fn ellipsize_cuts_to_width_and_marks_the_cut() {
-    let font = font();
-    let px = 16.0;
-    let full = "GitHub - zenbu-labs";
-    let whole = crate::canvas::measure_text(&font, full, px);
-    assert_eq!(crate::wrap::ellipsize(full, &font, px, whole), None);
-    let room = crate::canvas::measure_text(&font, "GitHub - zen", px);
-    let cut = crate::wrap::ellipsize(full, &font, px, room).expect("too wide, so cut");
-    assert!(cut.ends_with('\u{2026}') || cut.ends_with("..."), "{cut}");
-    assert!(cut.starts_with("GitHub"), "{cut}");
-    assert!(crate::canvas::measure_text(&font, &cut, px) <= room, "{cut} does not fit");
-    assert!(cut.len() < full.len());
 }
 

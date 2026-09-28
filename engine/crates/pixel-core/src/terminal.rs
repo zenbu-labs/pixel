@@ -7,11 +7,17 @@ use crate::canvas::Canvas;
 use crate::wrapper::Wrapper;
 use crate::kitty::Placement;
 
+mod payload;
+mod present;
+
+use payload::Payloads;
+
+use present::{Identity, Presenter};
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     HostClosed,
     Handoff(Handoff),
-    // Precise scroll deltas a host already paired with its trackpad, in pixels.
     Wheel {
         x: u32,
         y: u32,
@@ -25,6 +31,7 @@ pub enum Event {
     Focus(bool),
     Visible(bool),
     WindowSize(WindowSize),
+    CellSize((u32, u32)),
     ClipboardData {
         items: Vec<(String, Vec<u8>)>,
         ok: bool,
@@ -275,7 +282,6 @@ pub struct Terminal {
     mouse_pixels: bool,
     focused: bool,
     cell: Option<(u32, u32)>,
-    cell_query_unsupported: bool,
     pending: Vec<u8>,
     lone_escape_since: Option<Instant>,
     transport: FrameTransport,
@@ -284,10 +290,18 @@ pub struct Terminal {
     herdr_retry: Option<(Instant, Duration)>,
     frame_files: Vec<FrameFile>,
     frame_seq: u64,
+    payloads: Payloads,
     wrapper: Wrapper,
     image_id: u32,
     placeholders: Option<(u32, u32)>,
     placed_grid: Option<(u32, u32)>,
+    identity: Identity,
+    present: Presenter,
+    patches: present::Patched,
+    animation: present::Animation,
+    highlight_transmits: bool,
+    overlay: present::Overlay,
+    flashes: present::Flashes,
     wake_rx: Option<rustix::fd::OwnedFd>,
     waker: Option<Waker>,
     resize_slot: Option<usize>,
@@ -370,7 +384,7 @@ impl SessionEnv {
         Self { session: None }
     }
 
-    pub(crate) fn var(&self, key: &str) -> Option<String> {
+    pub fn var(&self, key: &str) -> Option<String> {
         match &self.session {
             Some(env) => env.get(key).cloned(),
             None => std::env::var(key).ok(),
@@ -478,10 +492,10 @@ impl Terminal {
 
     fn with_handle(mut io: TtyHandle, wrapper: Wrapper, env: SessionEnv) -> io::Result<Self> {
         let step = |name: &str, error: io::Error| io::Error::new(error.kind(), format!("{name}: {error}"));
-        let saved = retry_intr(|| termios::tcgetattr(&io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
+        let saved = retry_intr(|| termios::tcgetattr(io.read_fd())).map_err(|e| step("tcgetattr", e.into()))?;
         let mut raw = saved.clone();
         raw.make_raw();
-        retry_intr(|| termios::tcsetattr(&io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
+        retry_intr(|| termios::tcsetattr(io.read_fd(), OptionalActions::Drain, &raw)).map_err(|e| step("tcsetattr", e.into()))?;
 
         // would prefer if they weren't magic and linked to some known doc on the internet
         io.out().write_all(
@@ -510,7 +524,10 @@ impl Terminal {
         if terminal.herdr.is_none() && terminal.herdr_target.is_some() {
             terminal.herdr_retry = Some((Instant::now() + HERDR_RETRY_MIN, HERDR_RETRY_MIN));
         }
-        terminal.transport = terminal.probe_transport()?;
+        // these are a bit messy/sus
+        terminal.transport = terminal.probe_transport(&env)?;
+        terminal.identity = terminal.probe_identity(&env)?;
+        terminal.present = terminal.choose_present(&env)?;
         terminal.color_scheme_updates = terminal.probe_color_scheme()?;
         if terminal.color_scheme_updates {
             terminal.io.out().write_all(b"\x1b[?2031h")?;
@@ -533,7 +550,6 @@ impl Terminal {
             mouse_pixels: false,
             focused: true,
             cell: None,
-            cell_query_unsupported: false,
             pending: Vec::new(),
             lone_escape_since: None,
             transport: FrameTransport::Inline,
@@ -542,10 +558,18 @@ impl Terminal {
             herdr_retry: None,
             frame_files: Vec::new(),
             frame_seq: 0,
+            payloads: Payloads::default(),
             wrapper,
             image_id: frame_image_id(wrapper.relayed()),
             placeholders: None,
             placed_grid: None,
+            identity: Identity::Unknown,
+            present: Presenter::Full,
+            patches: present::Patched::default(),
+            animation: present::Animation::default(),
+            highlight_transmits: false,
+            overlay: present::Overlay::default(),
+            flashes: present::Flashes::default(),
             wake_rx: None,
             waker: None,
             resize_slot: None,
@@ -589,9 +613,9 @@ impl Terminal {
         self.io.out().flush()
     }
 
-    fn probe_transport(&mut self) -> io::Result<FrameTransport> {
-        if let Some(forced) = std::env::var("TERMINAL_BROWSER_FRAMES")
-            .ok()
+    fn probe_transport(&mut self, env: &SessionEnv) -> io::Result<FrameTransport> {
+        if let Some(forced) = env
+            .var("TERMINAL_BROWSER_FRAMES")
             .and_then(|value| match value.trim() {
                 "file" => Some(FrameTransport::File),
                 "shared" | "shm" => Some(FrameTransport::Shared),
@@ -602,14 +626,15 @@ impl Terminal {
             crate::logging::info("terminal", format!("frame transport forced to {forced:?}"));
             return Ok(forced);
         }
-        if self.probe_frame_file()? {
-            crate::logging::info("terminal", "frames go through a file the terminal re-reads");
-            return Ok(FrameTransport::File);
-        }
         if self.probe_shared_memory()? {
             crate::logging::info("terminal", "frames go through shared memory");
             return Ok(FrameTransport::Shared);
         }
+        if self.probe_frame_file()? {
+            crate::logging::info("terminal", "frames go through a file the terminal re-reads");
+            return Ok(FrameTransport::File);
+        }
+        // bad
         crate::logging::warn(
             "terminal",
             if self.wrapper.relayed() {
@@ -665,6 +690,7 @@ impl Terminal {
         Ok(reply.unwrap_or(false))
     }
 
+
     fn frame_path(&self, slot: u64, generation: u64) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "terminal-browser-{}-{}-{generation}-{slot}.rgba",
@@ -693,18 +719,6 @@ impl Terminal {
         Ok(file.path.to_string_lossy().into_owned())
     }
 
-    fn shm_name(&self, seq: u64) -> String {
-        format!("/px-{}-{}-{seq}", std::process::id(), self.terminal_id)
-    }
-
-    fn write_shm_frame(&mut self, data: &[u8]) -> io::Result<String> {
-        let name = self.shm_name(self.frame_seq % FRAME_SLOTS);
-        self.frame_seq += 1;
-        let _ = rustix::shm::unlink(&name);
-        write_shm(&name, data)?;
-        Ok(name)
-    }
-
     fn connect_herdr(&mut self) {
         self.herdr = self
             .herdr_target
@@ -715,7 +729,16 @@ impl Terminal {
         }
     }
 
-    pub fn draw(&mut self, canvas: &Canvas) -> io::Result<usize> {
+    pub fn set_highlight_transmits(&mut self, on: bool) {
+        self.highlight_transmits = on;
+    }
+
+    pub fn draws_locally(&self) -> bool {
+        self.hosted.is_none() && self.herdr.is_none() && self.herdr_target.is_none()
+    }
+
+    pub fn draw(&mut self, frame: crate::canvas::Frame<'_>) -> io::Result<usize> {
+        let canvas = frame.canvas;
         let embedded = self.is_embedded();
         if let Some(state) = &self.hosted {
             if state.closed {
@@ -758,76 +781,22 @@ impl Terminal {
                 }
             }
         }
-        let shrank = self
-            .last_frame_size
-            .is_some_and(|(w, h)| canvas.width < w || canvas.height < h);
-        self.last_frame_size = Some((canvas.width, canvas.height));
-
-        let mut frame = Vec::new();
-        frame.extend_from_slice(b"\x1b[?2026h"); // mode 2026 atomic updates
-        if shrank {
-            frame.extend_from_slice(&crate::kitty::kitty_delete(self.image_id, self.wrapper));
-            frame.extend_from_slice(b"\x1b[2J");
-            if let Ok(ws) = self.size() {
-                let blank_row = " ".repeat(ws.cols as usize);
-                for row in 1..=ws.rows {
-                    frame.extend_from_slice(format!("\x1b[{row};1H{blank_row}").as_bytes());
-                }
+        let mut out = Vec::new();
+        let drawn = match self.present {
+            Presenter::Full => {
+                let pixels = present::straight_pixels(canvas, frame.premultiplied);
+                self.draw_full(canvas, &pixels, &[], &mut out)
             }
-            self.placeholders = None;
-        }
-        let placement = if self.wrapper.relayed() {
-            let (cols, rows) = self.grid_for(canvas);
-            Placement::Cells { cols, rows }
-        } else {
-            frame.extend_from_slice(b"\x1b[H");
-            Placement::Cursor
+            Presenter::Patched => self.draw_patched(frame, &mut out),
+            Presenter::Animation => self.draw_animation(frame, &mut out),
         };
-        /*
-         we eventualy need to be more principled about
-         being generic over graphcis protocols to support
-         more terminals (even if degraded)
-        */
-        if let Some(medium) = match self.transport {
-            FrameTransport::File => Some(crate::kitty::Medium::File),
-            FrameTransport::Shared => Some(crate::kitty::Medium::Shared),
-            FrameTransport::Inline => None,
-        } {
-            let name = crate::profiler::span("kitty.handoff", || match self.transport {
-                FrameTransport::File => self.write_frame_file(&canvas.pixels),
-                _ => self.write_shm_frame(&canvas.pixels),
-            })?;
-            frame.extend_from_slice(&crate::kitty::kitty_transmit_named(
-                self.image_id,
-                canvas.width,
-                canvas.height,
-                &name,
-                medium,
-                placement,
-                self.wrapper,
-            ));
-        } else {
-            frame.extend_from_slice(&crate::kitty::kitty_transmit_placed(
-                self.image_id,
-                canvas.width,
-                canvas.height,
-                &canvas.pixels,
-                placement,
-                self.wrapper,
-            ));
-        }
-        if let Placement::Cells { cols, rows } = placement
-            && self.placeholders != Some((cols, rows))
-        {
-            frame.extend_from_slice(&crate::kitty::placeholder_grid(self.image_id, cols, rows));
-            self.placeholders = Some((cols, rows));
-        }
-        frame.extend_from_slice(b"\x1b[?2026l");
-        crate::profiler::span("term.write", || {
-            self.io.out().write_all(&frame)?;
-            self.io.out().flush()
-        })?;
-        Ok(frame.len())
+        self.write_synchronized(&out)?;
+        drawn
+    }
+
+    pub(crate) fn cell(&self) -> (u32, u32) {
+        let (cw, ch) = self.cell.unwrap_or(DEFAULT_CELL);
+        (cw.max(1), ch.max(1))
     }
 
     fn draw_embedded(&mut self, canvas: &Canvas) -> io::Result<usize> {
@@ -842,33 +811,12 @@ impl Terminal {
         if shrank || grid_changed {
             frame.extend_from_slice(&crate::kitty::kitty_delete_one(self.image_id));
         }
-        if let Some(medium) = match self.transport {
-            FrameTransport::File => Some(crate::kitty::Medium::File),
-            FrameTransport::Shared => Some(crate::kitty::Medium::Shared),
-            FrameTransport::Inline => None,
-        } {
-            let name = match self.transport {
-                FrameTransport::File => self.write_frame_file(&canvas.pixels)?,
-                _ => self.write_shm_frame(&canvas.pixels)?,
-            };
-            frame.extend_from_slice(&crate::kitty::kitty_transmit_named(
-                self.image_id,
-                canvas.width,
-                canvas.height,
-                &name,
-                medium,
-                placement,
-                Wrapper::None,
-            ));
-        } else {
-            frame.extend_from_slice(&crate::kitty::kitty_transmit_placed(
-                self.image_id,
-                canvas.width,
-                canvas.height,
-                &canvas.pixels,
-                placement,
-                Wrapper::None,
-            ));
+        let transmit = self.transmit(canvas, placement);
+        match self.hand_off_frame(&canvas.pixels)? {
+            Some((medium, name)) => {
+                frame.extend_from_slice(&crate::kitty::kitty_transmit_named(transmit, &name, medium, Wrapper::None));
+            }
+            None => frame.extend_from_slice(&crate::kitty::kitty_transmit_placed(transmit, &canvas.pixels, Wrapper::None)),
         }
         self.write_frame_gated(&frame)?;
         self.placed_grid = Some((cols, rows));
@@ -951,7 +899,7 @@ impl Terminal {
         let (cw, ch) = self
             .cell
             .or_else(|| self.size().ok().and_then(|ws| ws.cell_size()))
-            .unwrap_or((16, 32));
+            .unwrap_or(DEFAULT_CELL);
         (
             canvas.width.div_ceil(cw).max(1),
             canvas.height.div_ceil(ch).max(1),
@@ -985,6 +933,10 @@ impl Terminal {
                         Event::Focus(focused)
                     }
                     RawEvent::WindowSize(ws) => Event::WindowSize(ws),
+                    RawEvent::CellSize(cell) => {
+                        self.cell = Some(cell);
+                        Event::CellSize(cell)
+                    }
                     RawEvent::Mouse(kind, button, mods, x, y) => {
                         let (x, y) = match &self.herdr {
                             Some(herdr) => herdr.mouse_position_px(
@@ -1205,7 +1157,7 @@ impl Terminal {
             let (cw, ch) = self
                 .cell
                 .or_else(|| self.size().ok().and_then(|ws| ws.cell_size()))
-                .unwrap_or((16, 32));
+                .unwrap_or(DEFAULT_CELL);
             ((x - 1) * cw + cw / 2, (y - 1) * ch + ch / 2)
         }
     }
@@ -1214,7 +1166,7 @@ impl Terminal {
         if let Some(state) = &self.hosted {
             return Ok(state.size);
         }
-        let ws = retry_intr(|| termios::tcgetwinsize(&self.io.read_fd()))?;
+        let ws = retry_intr(|| termios::tcgetwinsize(self.io.read_fd()))?;
         Ok(WindowSize {
             cols: u32::from(ws.ws_col),
             rows: u32::from(ws.ws_row),
@@ -1231,35 +1183,35 @@ impl Terminal {
         self.transport == FrameTransport::Inline
     }
 
-    pub fn forget_cell_size(&mut self) {
-        self.cell = None;
+    pub fn set_cell_size(&mut self, cell: (u32, u32)) {
+        self.cell = Some(cell);
     }
 
     pub fn cell_size(&mut self) -> io::Result<Option<(u32, u32)>> {
         if self.cell.is_some() {
             return Ok(self.cell);
         }
-        if let Some(state) = &self.hosted {
-            self.cell = state.cell.or_else(|| state.size.cell_size());
+        if let Some(cell) = self.ask_cell_size()? {
+            self.cell = Some(cell);
             return Ok(self.cell);
         }
-        if self.wrapper.relayed() {
+        if self.hosted.is_none() && !self.wrapper.relayed() {
+            self.cell = self.read_report(300, parse_cell_size_report)?;
+        }
+        if self.cell.is_none() {
             self.cell = self.size()?.cell_size();
-            if self.cell.is_some() {
-                return Ok(self.cell);
-            }
         }
-        if !self.cell_query_unsupported {
-            self.io.out().write_all(b"\x1b[16t")?;
-            self.io.out().flush()?;
-            if let Some(cell) = self.read_report(300, parse_cell_size_report)? {
-                self.cell = Some(cell);
-                return Ok(self.cell);
-            }
-            self.cell_query_unsupported = true;
-        }
-        self.cell = self.size()?.cell_size();
         Ok(self.cell)
+    }
+
+
+    pub fn ask_cell_size(&mut self) -> io::Result<Option<(u32, u32)>> {
+        if let Some(state) = &self.hosted {
+            return Ok(state.cell.or_else(|| state.size.cell_size()));
+        }
+        self.io.out().write_all(&self.wrapper.wrap(b"\x1b[16t"))?;
+        self.io.out().flush()?;
+        Ok(None)
     }
 
     pub fn query_colors(&mut self) -> io::Result<TerminalColors> {
@@ -1380,11 +1332,11 @@ impl Terminal {
         let mut buf = Vec::new();
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() || buf.len() > 256 {
+            if remaining.is_zero() || buf.len() > 4096 {
                 return Ok(None);
             }
             if !self.wait_for_input(Some(remaining))? {
-                return Ok(None);
+                continue;
             }
             let mut chunk = [0u8; 64];
             let n = match rustix::io::read(self.io.read_fd(), &mut chunk) {
@@ -1408,8 +1360,6 @@ impl Terminal {
         }
         if self.hosted.is_some() {
             self.host_send(crate::hosted::pointer(shape))?;
-            // A foreign host lent us its terminal for drawing, so the shape can be
-            // set directly; the host hears about it to reset when the mouse leaves.
             if !self.is_embedded() {
                 return Ok(());
             }
@@ -1511,12 +1461,13 @@ impl Terminal {
     }
 }
 
+
 const SHM_PROBE_ID: u32 = 299;
 const FILE_PROBE_ID: u32 = 300;
 const FRAME_PROBE_TIMEOUT_MS: u64 = 300;
 
 const FRAME_SLOTS: u64 = 8;
-const DEFAULT_CELL: (u32, u32) = (16, 34);
+pub(crate) const DEFAULT_CELL: (u32, u32) = (16, 34);
 
 
 const EMBED_GATE_TICK: Duration = Duration::from_micros(20);
@@ -1570,6 +1521,7 @@ fn unread_output_of(handle: &TtyHandle) -> Option<usize> {
 const HERDR_RETRY_MIN: Duration = Duration::from_secs(1);
 const HERDR_RETRY_MAX: Duration = Duration::from_secs(10);
 
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTransport {
     File,
@@ -1579,9 +1531,7 @@ enum FrameTransport {
 
 static NEXT_TERMINAL_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/**
- * need to think about this case harder 
- */
+
 fn frame_image_id(relayed: bool) -> u32 {
     if !relayed {
         return 1;
@@ -1591,6 +1541,8 @@ fn frame_image_id(relayed: bool) -> u32 {
         id => id,
     }
 }
+
+
 
 fn parse_probe_reply(buf: &[u8], needle: &[u8]) -> Option<bool> {
     let pos = buf.windows(needle.len()).position(|w| w == needle)?;
@@ -1676,25 +1628,35 @@ impl Drop for FrameFile {
     }
 }
 
-#[allow(unsafe_code)]
 pub(crate) fn write_shm(name: &str, data: &[u8]) -> io::Result<()> {
+    let fd = open_shm(name, data.len())?;
+    fill_shm(&fd, data.len(), |out| out.copy_from_slice(data))
+}
+
+
+fn open_shm(name: &str, len: usize) -> io::Result<rustix::fd::OwnedFd> {
     let fd = rustix::shm::open(
         name,
         rustix::shm::OFlags::CREATE | rustix::shm::OFlags::EXCL | rustix::shm::OFlags::RDWR,
         rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR,
     )?;
-    rustix::fs::ftruncate(&fd, data.len() as u64)?;
+    rustix::fs::ftruncate(&fd, len as u64)?;
+    Ok(fd)
+}
+
+#[allow(unsafe_code)]
+fn fill_shm(fd: &rustix::fd::OwnedFd, len: usize, fill: impl FnOnce(&mut [u8])) -> io::Result<()> {
     unsafe {
         let ptr = rustix::mm::mmap(
             std::ptr::null_mut(),
-            data.len(),
+            len,
             rustix::mm::ProtFlags::READ | rustix::mm::ProtFlags::WRITE,
             rustix::mm::MapFlags::SHARED,
-            &fd,
+            fd,
             0,
         )?;
-        std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.cast(), data.len());
-        rustix::mm::munmap(ptr, data.len())?;
+        fill(std::slice::from_raw_parts_mut(ptr.cast::<u8>(), len));
+        rustix::mm::munmap(ptr, len)?;
     }
     Ok(())
 }
@@ -1710,9 +1672,7 @@ impl Drop for Terminal {
             let _ = self.io.out().flush();
             return;
         }
-        for slot in 0..FRAME_SLOTS {
-            let _ = rustix::shm::unlink(self.shm_name(slot));
-        }
+        self.payloads.remove_all();
         let delete = crate::kitty::kitty_delete(self.image_id, self.wrapper);
         let _ = self.io.out().write_all(&delete);
         if !self.kitty_keyboard {
@@ -1727,7 +1687,7 @@ impl Drop for Terminal {
         let _ = self.io.out().flush();
         if let Some(saved) = &self.saved {
             let _ = retry_intr(|| {
-                termios::tcsetattr(&self.io.read_fd(), OptionalActions::Flush, saved)
+                termios::tcsetattr(self.io.read_fd(), OptionalActions::Flush, saved)
             });
         }
     }
@@ -1740,6 +1700,7 @@ enum RawEvent {
     Paste(String),
     Focus(bool),
     WindowSize(WindowSize),
+    CellSize((u32, u32)),
     Clip(ClipPacket),
     Color(ColorSlot, [u8; 4]),
     ColorSchemeChanged,
@@ -2070,9 +2031,10 @@ fn parse_csi(buf: &[u8]) -> Option<(RawEvent, usize)> {
             Some((kind, button, mods, x, y)) => RawEvent::Mouse(kind, button, mods, x, y),
             None => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
         },
-        b't' => match parse_resize_report(params) {
-            Some(ws) => RawEvent::WindowSize(ws),
-            None => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
+        b't' => match (parse_resize_report(params), parse_cell_report(params)) {
+            (Some(ws), _) => RawEvent::WindowSize(ws),
+            (None, Some(cell)) => RawEvent::CellSize(cell),
+            (None, None) => RawEvent::Key(KeyEvent::plain(Key::Unknown)),
         },
         // `CSI ? 997 ; 1 n` — the terminal's palette changed under us.
         b'n' if params.starts_with(b"?997") => RawEvent::ColorSchemeChanged,
@@ -2349,7 +2311,6 @@ fn parse_osc_color(buf: &[u8], selector: &str) -> Option<[u8; 4]> {
     parse_rgb_spec(&spec)
 }
 
-/// One complete OSC reply: `OSC 10|11 ; rgb:… ST` or `OSC 4 ; <index> ; rgb:… ST`.
 fn parse_osc_color_reply(seq: &[u8]) -> Option<(ColorSlot, [u8; 4])> {
     let text = String::from_utf8_lossy(seq);
     let body = text.strip_prefix("\x1b]")?;
@@ -2376,16 +2337,21 @@ fn parse_osc_color_reply(seq: &[u8]) -> Option<(ColorSlot, [u8; 4])> {
 }
 
 fn parse_cell_size_report(buf: &[u8]) -> Option<(u32, u32)> {
-    let start = buf.windows(4).position(|w| w == b"\x1b[6;")? + 4;
+    let start = buf.windows(4).position(|w| w == b"\x1b[6;")? + 2;
     let end = start + buf[start..].iter().position(|&b| b == b't')?;
-    let mut parts = buf[start..end].split(|&b| b == b';');
-    let height: u32 = std::str::from_utf8(parts.next()?).ok()?.parse().ok()?;
-    let width: u32 = std::str::from_utf8(parts.next()?).ok()?.parse().ok()?;
-    if width > 0 && height > 0 {
-        Some((width, height))
-    } else {
-        None
+    parse_cell_report(&buf[start..end])
+}
+
+fn parse_cell_report(params: &[u8]) -> Option<(u32, u32)> {
+    let mut fields = params
+        .split(|&b| b == b';')
+        .map(|field| std::str::from_utf8(field).ok()?.parse::<u32>().ok());
+    if fields.next()?? != 6 {
+        return None;
     }
+    let height = fields.next()??;
+    let width = fields.next()??;
+    (width > 0 && height > 0).then_some((width, height))
 }
 
 #[cfg(test)]
@@ -2428,37 +2394,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(unsafe_code)]
-    fn shm_roundtrip() {
-        let name = format!("/px-test-{}", std::process::id());
-        let data: Vec<u8> = (0..8192).map(|i| (i % 251) as u8).collect();
-        write_shm(&name, &data).unwrap();
-
-        let fd = rustix::shm::open(
-            &name,
-            rustix::shm::OFlags::RDONLY,
-            rustix::fs::Mode::empty(),
-        )
-        .unwrap();
-        let read_back = unsafe {
-            let ptr = rustix::mm::mmap(
-                std::ptr::null_mut(),
-                data.len(),
-                rustix::mm::ProtFlags::READ,
-                rustix::mm::MapFlags::SHARED,
-                &fd,
-                0,
-            )
-            .unwrap();
-            let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), data.len()).to_vec();
-            rustix::mm::munmap(ptr, data.len()).unwrap();
-            bytes
-        };
-        rustix::shm::unlink(&name).unwrap();
-        assert_eq!(read_back, data);
-    }
-
-    #[test]
     fn parses_in_band_resize_reports() {
         let (event, used) = parse_event(b"\x1b[48;30;100;630;1000t").unwrap();
         assert_eq!(
@@ -2476,7 +2411,7 @@ mod tests {
         let (event, _) = parse_event(b"\x1b[48;30;100;0;0t").unwrap();
         assert!(matches!(event, RawEvent::WindowSize(ws) if ws.cell_size().is_none()));
         let (event, _) = parse_event(b"\x1b[6;21;10t").unwrap();
-        assert!(!matches!(event, RawEvent::WindowSize(_)));
+        assert!(matches!(event, RawEvent::CellSize((10, 21))));
     }
 
     #[test]
@@ -2520,6 +2455,16 @@ mod tests {
         );
         assert_eq!(parse_sgr_mouse(b"0;1;1", true), None);
         assert_eq!(parse_sgr_mouse(b"<0;0;1", true), None);
+
+        assert_eq!(parse_sgr_mouse(b"<4;1;1", true).unwrap().2, SHIFT);
+        assert_eq!(parse_sgr_mouse(b"<8;1;1", true).unwrap().2, ALT);
+        assert_eq!(
+            parse_sgr_mouse(b"<80;1;1", true).unwrap(),
+            (MouseKind::ScrollUp, MouseButton::Left, CTRL, 1, 1),
+            "ctrl+wheel keeps the scroll direction"
+        );
+        let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
+        assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
     }
 
     #[test]
@@ -2570,17 +2515,6 @@ mod tests {
         assert_eq!(parse_kitty_keyboard(b"\x1b[?u"), None);
         // and it is still found behind one of them
         assert_eq!(parse_kitty_keyboard(b"\x1b[?62;22;52c\x1b[?27u"), Some(true));
-    }
-
-    #[test]
-    fn sgr_mouse_decodes_modifier_bits() {
-        assert_eq!(parse_sgr_mouse(b"<4;1;1", true).unwrap().2, SHIFT);
-        assert_eq!(parse_sgr_mouse(b"<8;1;1", true).unwrap().2, ALT);
-        assert_eq!(
-            parse_sgr_mouse(b"<80;1;1", true).unwrap(),
-            (MouseKind::ScrollUp, MouseButton::Left, CTRL, 1, 1),
-            "ctrl+wheel keeps the scroll direction"
-        );
     }
 
     fn key(k: Key) -> RawEvent {
@@ -2662,7 +2596,7 @@ mod tests {
     }
 
     #[test]
-    fn reads_color_replies_for_every_slot() {
+    fn reads_color_replies_for_every_slot_and_leaves_the_next_keystroke_alone() {
         assert_eq!(
             parse_event(b"\x1b]10;rgb:ff/ee/dd\x1b\\"),
             Some((RawEvent::Color(ColorSlot::Foreground, [255, 238, 221, 255]), 19))
@@ -2676,10 +2610,7 @@ mod tests {
             None,
             "slots past the 16 we track"
         );
-    }
 
-    #[test]
-    fn color_replies_between_keystrokes_leave_the_keystroke_alone() {
         let stream = b"\x1b]11;rgb:1e/2a/34\x07a";
         let (event, used) = parse_event(stream).unwrap();
         assert_eq!(event, RawEvent::Color(ColorSlot::Background, [30, 42, 52, 255]));
@@ -2693,11 +2624,26 @@ mod tests {
     }
 
     #[test]
-    fn decrqm_reports_color_scheme_support() {
+    fn decrqm_replies_say_whether_a_mode_is_supported() {
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;1$y"), Some(true));
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;2$y"), Some(true));
         assert_eq!(parse_decrqm_2031(b"\x1b[?2031;0$y"), Some(false));
         assert_eq!(parse_decrqm_2031(b""), None, "terminal never answered");
+
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;2$y"), Some(true));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;1$y"), Some(true));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;0$y"), Some(false));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;4$y"), Some(false));
+        assert_eq!(parse_decrqm_5522(b"\x1b[?1016;1$y"), None);
+
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;1$y"), Some(true));
+        assert_eq!(
+            parse_decrqm_1016(b"\x1b[?1016;2$y"),
+            Some(false),
+            "pixel mouse reports only count when the mode is on, unlike the other modes"
+        );
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;0$y"), Some(false));
+        assert_eq!(parse_decrqm_1016(b"\x1b[?1015;1$y"), None);
     }
 
     #[test]
@@ -2776,12 +2722,6 @@ mod tests {
         assert_eq!(parse_event(b"\x1b[24~"), Some((key(Key::Function(12)), 5)));
         assert_eq!(parse_event(b"\x1bOP"), Some((key(Key::Function(1)), 3)));
         assert_eq!(parse_event(b"\x1b[57444;9u"), Some((key_mods(Key::LeftSuper, SUPER), 10)));
-    }
-
-    #[test]
-    fn parses_mouse_modifiers() {
-        let (_, _, mods, _, _) = parse_sgr_mouse(b"<28;1;1", true).unwrap();
-        assert!(mods.shift && mods.alt && mods.ctrl && !mods.sup);
     }
 
     #[test]
@@ -2895,14 +2835,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_decrqm_mouse_pixel_reply() {
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;1$y"), Some(true));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;2$y"), Some(false));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1016;0$y"), Some(false));
-        assert_eq!(parse_decrqm_1016(b"\x1b[?1015;1$y"), None);
-    }
-
-    #[test]
     fn clip_packets_parse_status_mime_and_chunk() {
         use base64::Engine as _;
         let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
@@ -2926,84 +2858,28 @@ mod tests {
         assert!(parse_clip_packet(b"\x1b]52;c;?\x1b\\").is_none(), "osc52 untouched");
     }
 
-    #[test]
-    fn decrqm_5522_reports_support() {
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;2$y"), Some(true));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;1$y"), Some(true));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;0$y"), Some(false));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?5522;4$y"), Some(false));
-        assert_eq!(parse_decrqm_5522(b"\x1b[?1016;1$y"), None);
-    }
-
-    #[test]
-    fn clip_data_chunks_of_one_mime_concatenate() {
-        use base64::Engine as _;
-        let b64 = |v: &[u8]| base64::engine::general_purpose::STANDARD.encode(v);
-        let packet = |body: String| parse_clip_packet(body.as_bytes()).unwrap();
-        let mut read = ClipRead::default();
-        for chunk in [b"first-".as_slice(), b"second".as_slice()] {
-            let p = packet(format!(
-                "\x1b]5522;type=read:status=DATA:mime={};{}\x1b\\",
-                b64(b"image/png"),
-                b64(chunk)
-            ));
-            let mime = p.mime.unwrap();
-            match read.items.last_mut() {
-                Some((last, data)) if *last == mime => data.extend_from_slice(&p.payload),
-                _ => read.items.push((mime, p.payload)),
-            }
-        }
-        assert_eq!(read.items.len(), 1);
-        assert_eq!(read.items[0].1, b"first-second");
-    }
 }
 
 #[cfg(test)]
 mod tty_tests {
     use super::*;
+    use std::io::{Read as _, Write as _};
+
+    fn open(path: &str, wrapper: Wrapper) -> Terminal {
+        Terminal::open(path, wrapper, SessionEnv::of_session(Default::default())).unwrap()
+    }
 
     #[test]
     fn mouse_coordinates_match_the_negotiated_format() {
-        use std::io::Write as _;
-
         for (reply, wrapper) in [
             (Some(b"\x1b[?1016;1$y".as_slice()), Wrapper::None),
             (Some(b"\x1b[?1016;4$y".as_slice()), Wrapper::None),
             (None, Wrapper::None),
             (None, Wrapper::Tmux),
         ] {
-            let (mut master, _slave, path) = open_pty();
-            let emulator = std::thread::spawn(move || {
-                use std::io::Read as _;
-                let mut seen = Vec::new();
-                let mut pixels = false;
-                let mut byte = [0u8; 1];
-                while master.read_exact(&mut byte).is_ok() {
-                    seen.push(byte[0]);
-                    if seen.ends_with(b"\x1b[?1016h") {
-                        pixels = true;
-                    } else if seen.ends_with(b"\x1b[?1016l")
-                        || seen.ends_with(b"\x1b[?1006h")
-                    {
-                        pixels = false;
-                    } else if seen.ends_with(b"\x1b[?1016$p") {
-                        if let Some(reply) = reply {
-                            master.write_all(reply).unwrap();
-                        }
-                    } else if seen.ends_with(b"\x1b[5n") {
-                        master
-                            .write_all(if pixels {
-                                b"\x1b[<0;485;329M"
-                            } else {
-                                b"\x1b[<0;61;21M"
-                            })
-                            .unwrap();
-                    } else if seen.ends_with(b"\x1b[?1049l") {
-                        break;
-                    }
-                }
-            });
-            let mut term = Terminal::open(&path, wrapper, SessionEnv::of_process()).unwrap();
+            let (master, _slave, path) = open_pty();
+            let _terminal = fake_terminal_answering_1016(&master, reply);
+            let mut term = open(&path, wrapper);
             term.cell = Some((8, 16));
             term.io.out().write_all(b"\x1b[5n").unwrap();
             term.io.out().flush().unwrap();
@@ -3018,8 +2894,6 @@ mod tty_tests {
                 }))),
                 "the same click must land at (484, 328), reply={reply:?}, wrapper={wrapper:?}: {event:?}"
             );
-            drop(term);
-            emulator.join().unwrap();
         }
     }
 
@@ -3051,38 +2925,84 @@ mod tty_tests {
         (master, slave, path)
     }
 
-    /// Terminal teardown drains the tty output queue (tcsetattr TCSAFLUSH),
-    /// which only empties when the master side reads — a real terminal always
-    /// does, the test must too or Drop blocks forever.
-    fn drain(master: &std::fs::File) -> std::thread::JoinHandle<Vec<u8>> {
+    fn fake_terminal(master: &std::fs::File) -> std::thread::JoinHandle<()> {
+        fake_terminal_answering_1016(master, Some(b"\x1b[?1016;0$y"))
+    }
+
+    fn fake_terminal_answering_1016(
+        master: &std::fs::File,
+        mode_1016: Option<&'static [u8]>,
+    ) -> std::thread::JoinHandle<()> {
         let mut master = master.try_clone().unwrap();
         std::thread::spawn(move || {
-            use std::io::Read as _;
-            let mut sink = Vec::new();
-            let mut buf = [0u8; 4096];
-            while let Ok(n) = master.read(&mut buf) {
-                if n == 0 {
-                    break;
+            let mut seen = Vec::new();
+            let mut pixels = false;
+            let mut byte = [0u8; 1];
+            while master.read_exact(&mut byte).is_ok() {
+                seen.push(byte[0]);
+                let reply: Option<Vec<u8>> = if seen.ends_with(b"\x1b[?1016h") {
+                    pixels = true;
+                    None
+                } else if seen.ends_with(b"\x1b[?1016l") || seen.ends_with(b"\x1b[?1006h") {
+                    pixels = false;
+                    None
+                } else if seen.ends_with(b"\x1b[?u") {
+                    Some(b"\x1b[?0u".to_vec())
+                } else if seen.ends_with(b"\x1b[?1016$p") {
+                    mode_1016.map(<[u8]>::to_vec)
+                } else if seen.ends_with(b"\x1b[?5522$p") {
+                    Some(b"\x1b[?5522;0$y".to_vec())
+                } else if seen.ends_with(b"\x1b[?2031$p") {
+                    Some(b"\x1b[?2031;0$y".to_vec())
+                } else if seen.ends_with(b"\x1b[>0q") {
+                    Some(b"\x1bP>|fake 0.0\x1b\\".to_vec())
+                } else if seen.ends_with(b"\x1b[5n") {
+                    Some(if pixels { b"\x1b[<0;485;329M".to_vec() } else { b"\x1b[<0;61;21M".to_vec() })
+                } else if seen.ends_with(b"\x1b\\") {
+                    graphics_error(&seen)
+                } else {
+                    continue;
+                };
+                seen.clear();
+                if let Some(reply) = reply {
+                    master.write_all(&reply).unwrap();
                 }
-                sink.extend_from_slice(&buf[..n]);
             }
-            sink
         })
+    }
+
+    fn graphics_error(seen: &[u8]) -> Option<Vec<u8>> {
+        let start = seen.windows(3).rposition(|w| w == b"\x1b_G")? + 3;
+        let control = seen[start..].split(|&b| b == b';').next()?;
+        let mut action = None;
+        let mut id = None;
+        for pair in std::str::from_utf8(control).ok()?.split(',') {
+            match pair.split_once('=') {
+                Some(("a", value)) => action = Some(value),
+                Some(("i", value)) => id = value.parse::<u32>().ok(),
+                _ => {}
+            }
+        }
+        let error = match action? {
+            "q" => "ENOENT:no such medium",
+            "f" => "EINVAL:no such action",
+            _ => return None,
+        };
+        Some(format!("\x1b_Gi={};{error}\x1b\\", id?).into_bytes())
     }
 
     #[test]
     fn two_terminals_share_a_process() {
         let (mut master_a, _slave_a, path_a) = open_pty();
         let (master_b, _slave_b, path_b) = open_pty();
-        let _drain_a = drain(&master_a);
-        let _drain_b = drain(&master_b);
-        let mut a = Terminal::open(&path_a, Wrapper::None, SessionEnv::of_process()).unwrap();
-        let mut b = Terminal::open(&path_b, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal_a = fake_terminal(&master_a);
+        let _terminal_b = fake_terminal(&master_b);
+        let mut a = open(&path_a, Wrapper::None);
+        let mut b = open(&path_b, Wrapper::None);
 
         assert_ne!(a.terminal_id, b.terminal_id);
         assert_ne!(a.shm_name(0), b.shm_name(0));
 
-        use std::io::Write as _;
         master_a.write_all(b"\x1b[97;;97u").unwrap();
         let got = a.poll_event(Some(Duration::from_millis(500))).unwrap();
         assert!(
@@ -3107,11 +3027,10 @@ mod tty_tests {
     }
 
     #[test]
-    fn a_bare_escape_resolves_on_its_own_under_tmux() {
-        use std::io::Write as _;
+    fn a_bare_escape_resolves_on_its_own_only_under_tmux() {
         let (mut master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::Tmux, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::Tmux);
 
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(500))).unwrap();
@@ -3126,14 +3045,10 @@ mod tty_tests {
             matches!(&next, Some(Event::Key(key)) if key.key == Key::Char('p') && key.mods.alt),
             "the key after an escape must survive: {next:?}"
         );
-    }
 
-    #[test]
-    fn a_bare_escape_still_waits_for_more_outside_tmux() {
-        use std::io::Write as _;
         let (mut master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
 
         master.write_all(b"\x1b").unwrap();
         let got = term.poll_event(Some(Duration::from_millis(200))).unwrap();
@@ -3143,15 +3058,20 @@ mod tty_tests {
     #[test]
     fn a_wake_ends_a_blocking_poll() {
         let (master, _slave, path) = open_pty();
-        let _drain = drain(&master);
-        let mut term = Terminal::open(&path, Wrapper::None, SessionEnv::of_process()).unwrap();
+        let _terminal = fake_terminal(&master);
+        let mut term = open(&path, Wrapper::None);
         let waker = term.waker().unwrap();
 
         std::thread::spawn(move || {
             std::thread::sleep(Duration::from_millis(20));
             waker.wake();
         });
-        let got = term.poll_event(None).unwrap();
+        let started = Instant::now();
+        let got = term.poll_event(Some(Duration::from_secs(5))).unwrap();
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the poll ran to its deadline instead of ending at the wake"
+        );
         assert!(got.is_none(), "a wake carries no terminal event: {got:?}");
     }
 }

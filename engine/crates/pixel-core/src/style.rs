@@ -214,6 +214,7 @@ pub struct Style {
     pub wrap: bool,
     pub ellipsis: bool,
     pub selectable: Option<bool>,
+    pub opaque: bool,
     pub selection_color: Option<Color>,
     pub selection_mode: SelectionMode,
 }
@@ -249,6 +250,7 @@ impl Default for Style {
             scrollbar: None,
             wrap: true,
             ellipsis: false,
+            opaque: false,
             selectable: None,
             selection_color: None,
             selection_mode: SelectionMode::default(),

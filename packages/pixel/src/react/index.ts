@@ -15,6 +15,7 @@ import {
 import type { PasteSource, PastedImage, SelectionPart } from "./reconciler-config";
 import type { EngineInfo, HostOptions, TerminalColors } from "./native";
 import { Surface } from "./surface";
+import { requestFrameRate } from "../web/frame-rate";
 import { handleDevtoolsKey } from "./devtools/app";
 import { installConsoleCapture } from "./devtools/console-capture";
 import {
@@ -25,16 +26,19 @@ import {
   openDevtools,
   requestLayout,
   selectNode,
+  startRecording,
+  stopRecording,
   toggleDevtools,
   unmountDevtools,
 } from "./devtools/controller";
-import { setProfileDirectory } from "./devtools/export-profile";
+import { exportProfile, setProfileDirectory } from "./devtools/export-profile";
 import { installFiberHook } from "./devtools/fiber-hook";
 import type { Rgba } from "./native";
 import { publishColors } from "./colors";
 import { refreshTheme } from "./devtools/theme";
 import {
   devtoolsStore,
+  DevtoolsTab,
   engineLogs,
   inspectorStore,
   layoutStore,
@@ -59,8 +63,10 @@ export {
 } from "./components";
 export type { NodeHandle } from "./components";
 export { appLog };
-export { layoutStore, profilerStore } from "./devtools/stores";
-export type { LayoutSnapshot, ProfileSession } from "./devtools/stores";
+export { layoutStore, profilerStore, engineLogs } from "./devtools/stores";
+export { useStore } from "./devtools/store";
+export type { LogRow, LogBuffer } from "./devtools/store";
+export type { DevtoolsTab, LayoutSnapshot, ProfileSession } from "./devtools/stores";
 export type {
   BoxProps,
   TextProps,
@@ -183,6 +189,15 @@ export interface RootOptions {
   sessionEnv?: NodeJS.ProcessEnv;
 }
 
+
+export interface RenderSettings {
+  maxFps?: number;
+  frameBudgetMbps?: number;
+  highlightTransmits?: boolean;
+  compareFrames?: boolean;
+  frameEvents?: boolean;
+}
+
 export interface PixelRoot {
   info: EngineInfo;
   sharedTextures: boolean;
@@ -192,8 +207,13 @@ export interface PixelRoot {
   createSurface(): Surface;
   surfaceStats(): SurfaceStats;
   stop(): void;
-  openDevtools(): void;
+  openDevtools(tab?: DevtoolsTab): void;
   closeDevtools(): void;
+  startProfile(): void;
+  stopProfile(): Promise<string | null>;
+  setRender(settings: RenderSettings): void;
+  setLogFile(path: string | null): void;
+  highlightTransmits(): boolean;
   // nudge resize is a ridiculous api
   nudgeResize(): void;
   queryLayout(): void;
@@ -232,6 +252,8 @@ interface EngineEventJson {
   max?: number;
   width?: number;
   height?: number;
+  cellWidth?: number;
+  cellHeight?: number;
   basePx?: number;
   colors?: TerminalColors;
   message?: string;
@@ -335,7 +357,7 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
     },
     null
   );
-  if (devtoolsEnabled) enableDevtools();
+  if (devtoolsEnabled) installConsoleCapture();
 
   const fontIds = new Map<string, number>();
   const fontRequests = new Map<
@@ -491,6 +513,8 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         if (view === APP_VIEW) {
           info.width = size.width;
           info.height = size.height;
+          info.cellWidth = event.cellWidth!;
+          info.cellHeight = event.cellHeight!;
           info.basePx = size.basePx;
           options.onResize?.(size);
         } else if (devtoolsBridge() === bridge) {
@@ -712,10 +736,50 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
       if (ownsStdout) process.stdout.off("resize", forwardResize);
       process.off("exit", restore);
     },
-    openDevtools() {
+    openDevtools(tab?: DevtoolsTab) {
       enableDevtools();
       attachDevtools(bridge);
+      if (tab) devtoolsStore.update((s) => ({ ...s, tab }));
       openDevtools();
+    },
+    startProfile() {
+      enableDevtools();
+      attachDevtools(bridge);
+      startRecording();
+    },
+    stopProfile() {
+      return new Promise<string | null>((resolve) => {
+        const now = profilerStore.get();
+        if (!now.recording && !now.pendingStop) {
+          resolve(exportProfile());
+          return;
+        }
+        const unsubscribe = profilerStore.subscribe(() => {
+          const state = profilerStore.get();
+          if (state.recording || state.pendingStop) return;
+          unsubscribe();
+          resolve(exportProfile());
+        });
+        stopRecording();
+      });
+    },
+    setRender(settings: RenderSettings) {
+      // The browser should not bother producing frames the engine would only drop.
+      if (settings.maxFps !== undefined) requestFrameRate(settings.maxFps);
+      devtoolsStore.update((s) => ({
+        ...s,
+        maxFps: settings.maxFps ?? s.maxFps,
+        highlightTransmits: settings.highlightTransmits ?? s.highlightTransmits,
+      }));
+      bridge.push(APP_VIEW, { op: "setRender", ...settings });
+      bridge.flush();
+    },
+    setLogFile(path: string | null) {
+      bridge.push(APP_VIEW, { op: "setLogFile", path });
+      bridge.flush();
+    },
+    highlightTransmits() {
+      return devtoolsStore.get().highlightTransmits;
     },
     closeDevtools() {
       if (devtoolsBridge() === bridge) closeDevtools();

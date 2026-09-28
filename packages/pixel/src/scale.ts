@@ -11,17 +11,17 @@ export function hostDisplayScale(terminal: Terminal | null, env: NodeJS.ProcessE
 }
 
 export class CellZoomFollower {
-  private last: { height: number; basePx: number } | null = null;
+  private last: { rows: number; basePx: number } | null = null;
 
   ratio(info: EngineInfo): number | null {
-    const { height, basePx } = info;
+    const { height, basePx, cellHeight } = info;
+    const rows = cellHeight > 0 ? Math.round(height / cellHeight) : 0;
     const prev = this.last;
-    this.last = { height, basePx };
-    if (!prev || !prev.basePx || !prev.height) return null;
+    this.last = { rows, basePx };
+    if (!prev || !prev.basePx || !prev.rows || !rows) return null;
     const ratio = basePx / prev.basePx;
     if (!Number.isFinite(ratio) || ratio <= 0 || Math.abs(ratio - 1) < 0.01) return null;
-    const paneRatio = height / prev.height;
-    if (Math.abs(paneRatio - ratio) < 0.04 * ratio) return null;
+    if (rows === prev.rows) return null;
     return ratio;
   }
 }

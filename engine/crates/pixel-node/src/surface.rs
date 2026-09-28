@@ -18,7 +18,7 @@ pub enum SurfacePixels {
 pub struct SurfaceFrame {
     pub id: u32,
     pub pixels: SurfacePixels,
-    pub damage: Option<Rect>,
+    pub damage: Option<Vec<Rect>>,
 }
 
 pub enum SurfaceCommand {
@@ -42,6 +42,8 @@ pub struct SurfaceMailbox {
     slots: Mutex<HashMap<u32, Slot>>,
     submitted: AtomicU64,
     coalesced: AtomicU64,
+    carried: AtomicU64,
+    lost: AtomicU64,
     presented: AtomicU64,
     rows: AtomicU64,
 }
@@ -50,18 +52,27 @@ impl SurfaceMailbox {
     pub fn submit(&self, id: u32, pixels: SurfacePixels, damage: Option<Rect>) {
         let mut slots = self.slots.lock().unwrap_or_else(|error| error.into_inner());
         let slot = slots.entry(id).or_default();
-        let damage: Option<Rect> = match slot.pending.take() {
+        let damage: Option<Vec<Rect>> = match slot.pending.take() {
             Some(Pending::Frame(dropped)) => {
                 self.coalesced.fetch_add(1, Ordering::Relaxed);
                 if let SurfacePixels::Owned { bgra, .. } = dropped.pixels {
                     slot.spare = Some(bgra);
                 }
                 match (dropped.damage, damage) {
-                    (Some(a), Some(b)) => Some(a.union(b)),
-                    _ => None,
+                    // wait, so it pushes damage to a damage list? eh?
+                    (Some(mut list), Some(b)) => {
+                        self.carried.fetch_add(1, Ordering::Relaxed);
+                        list.push(b);
+                        // then it coalesces? we must be performing the compare soon?
+                        Some(list)
+                    }
+                    _ => {
+                        self.lost.fetch_add(1, Ordering::Relaxed);
+                        None
+                    }
                 }
             }
-            Some(Pending::Remove) | None => damage,
+            Some(Pending::Remove) | None => damage.map(|rect| vec![rect]),
         };
         slot.pending = Some(Pending::Frame(SurfaceFrame { id, pixels, damage }));
         self.submitted.fetch_add(1, Ordering::Relaxed);
@@ -104,6 +115,11 @@ impl SurfaceMailbox {
                 slot.spare = Some(bgra);
             }
         }
+    }
+
+    /// Running totals of dropped frames whose damage survived, and whose damage did not.
+    pub fn dropped(&self) -> (u64, u64) {
+        (self.carried.load(Ordering::Relaxed), self.lost.load(Ordering::Relaxed))
     }
 
     pub fn stats(&self) -> (u64, u64, u64, u64) {
@@ -150,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn dropping_a_frame_carries_its_damage_into_the_next_one() {
+    fn dropping_a_frame_keeps_its_damage_as_separate_rects() {
         let mailbox = SurfaceMailbox::default();
         mailbox.submit(1, owned(1), Some(rect(0, 2)));
         mailbox.submit(1, owned(2), Some(rect(8, 2)));
@@ -158,7 +174,7 @@ mod tests {
         let SurfaceCommand::Frame(frame) = &commands[0] else {
             panic!("expected a frame");
         };
-        assert_eq!(frame.damage, Some(rect(0, 10)));
+        assert_eq!(frame.damage, Some(vec![rect(0, 2), rect(8, 2)]));
     }
 
     #[test]

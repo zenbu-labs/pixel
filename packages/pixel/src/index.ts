@@ -42,7 +42,10 @@ export {
   SurfaceCapture,
   captureFilmstrip,
   encodeRecording,
+  engineLogs,
+  useStore,
 } from "./react";
+export type { LogRow, LogBuffer } from "./react";
 export type {
   BoxProps,
   TextProps,

@@ -29,8 +29,6 @@ pub(crate) struct Herdr {
     frames: BufReader<UnixStream>,
     directory: PathBuf,
     cell: (u32, u32),
-    // Set when the host only takes bgra frames; the copy into the frame file
-    // then swaps channels instead of costing a second pass.
     bgra: bool,
     files: Vec<FrameFile>,
     retired: Vec<FrameFile>,
@@ -254,15 +252,6 @@ fn field_u32(json: &str, key: &str) -> Option<u32> {
     rest[..end].parse().ok()
 }
 
-#[cfg_attr(not(test), expect(dead_code, reason = "herdr reports pane_visible; nothing skips rendering on it yet"))]
-fn field_bool(json: &str, key: &str) -> Option<bool> {
-    match value_after(json, key)? {
-        rest if rest.starts_with("true") => Some(true),
-        rest if rest.starts_with("false") => Some(false),
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests_support {
     pub(crate) fn frame_path(header: &str) -> String {
@@ -280,7 +269,6 @@ mod tests {
     fn reads_the_fields_an_info_reply_carries() {
         assert_eq!(field_u32(INFO, "cell_width_px"), Some(9));
         assert_eq!(field_u32(INFO, "cell_height_px"), Some(19));
-        assert_eq!(field_bool(INFO, "pane_visible"), Some(true));
         assert_eq!(
             field_str(INFO, "file_frame_directory").as_deref(),
             Some("/tmp/herdr/frames/source")
@@ -289,20 +277,8 @@ mod tests {
             field_str(INFO, "file_frame_transport").as_deref(),
             Some("direct-kitty")
         );
-    }
-
-    #[test]
-    fn a_missing_field_is_absent_rather_than_wrong() {
         assert_eq!(field_u32(INFO, "nope"), None);
         assert_eq!(field_str(INFO, "nope"), None);
-        assert_eq!(field_bool(INFO, "nope"), None);
-        assert_eq!(field_bool(INFO, "file_frame_transport"), None);
-    }
-
-    #[test]
-    fn an_info_reply_without_file_transport_is_not_ours_to_use() {
-        let plain = r#"{"id":"info","result":{"cell_width_px":9,"cell_height_px":19,"pane_visible":true}}"#;
-        assert_eq!(field_str(plain, "file_frame_transport"), None);
     }
 
     #[test]
@@ -421,13 +397,9 @@ mod tests {
         let dir = scratch("inline");
         let (socket, _frames) = fake_herdr(&dir, "");
         assert!(Herdr::connect("w1:p1", &socket.to_string_lossy()).is_none());
-    }
 
-    #[test]
-    fn nothing_listening_is_simply_not_herdr() {
-        let dir = scratch("absent");
-        let socket = dir.join("missing.sock");
-        assert!(Herdr::connect("w1:p1", &socket.to_string_lossy()).is_none());
+        let missing = dir.join("missing.sock");
+        assert!(Herdr::connect("w1:p1", &missing.to_string_lossy()).is_none());
     }
 
     #[test]
@@ -486,10 +458,18 @@ mod degraded_wheel_tests {
 
     #[test]
     fn unfocused_in_grid_wheel_rescales_to_cell_centers() {
-        let dir = tests::scratch("degraded-wheel");
-        let (socket, _frames) = tests::fake_herdr(&dir, "direct-kitty");
-        // fake_herdr advertises a 10x20 cell size.
-        let herdr = Herdr::connect("w1:p1", &socket.to_string_lossy()).unwrap();
+        let (stream, _herdr_end) = UnixStream::pair().unwrap();
+        let herdr = Herdr {
+            frames: BufReader::new(stream),
+            directory: PathBuf::new(),
+            cell: (10, 20),
+            bgra: false,
+            files: Vec::new(),
+            retired: Vec::new(),
+            instance: 0,
+            generation: 0,
+            seq: 0,
+        };
 
         // The bug case: an unfocused wheel arrives as cells (8, 9) and is
         // rescaled to the cell center.

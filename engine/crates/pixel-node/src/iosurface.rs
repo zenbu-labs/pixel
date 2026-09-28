@@ -1,7 +1,6 @@
 #![allow(unsafe_code, clippy::undocumented_unsafe_blocks)]
 
 use std::ffi::c_void;
-use std::mem::size_of;
 use std::ptr::NonNull;
 
 type IOSurfaceRef = *mut c_void;
@@ -35,12 +34,9 @@ impl Drop for RetainedSurface {
 }
 
 impl RetainedSurface {
-    pub fn from_handle(handle: &[u8]) -> Result<Self, String> {
-        let pointer: [u8; size_of::<usize>()] = handle
-            .try_into()
-            .map_err(|_| "invalid IOSurface handle".to_string())?;
-        let surface = NonNull::new(usize::from_ne_bytes(pointer) as IOSurfaceRef)
-            .ok_or_else(|| "empty IOSurface handle".to_string())?;
+    /// Retains an IOSurface from its raw address, as handed over by Electron.
+    pub fn retain(address: usize) -> Result<Self, String> {
+        let surface = NonNull::new(address as IOSurfaceRef).ok_or_else(|| "empty IOSurface handle".to_string())?;
         unsafe { CFRetain(surface.as_ptr()) };
         Ok(Self(surface))
     }

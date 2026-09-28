@@ -457,15 +457,12 @@ mod tests {
     }
 
     #[test]
-    fn streaming_repairs_trailing_bold() {
+    fn streaming_repairs_trailing_bold_and_marks_incomplete_links() {
         let blocks = parse_streaming("some **bol");
         let block = &blocks[0];
         assert_eq!(block.text, "some bol");
         assert!(block.spans.iter().any(|s| s.bold));
-    }
 
-    #[test]
-    fn streaming_marks_incomplete_links() {
         let blocks = parse_streaming("see [docs](https://exam");
         let span = blocks[0].spans.iter().find(|s| s.incomplete_link).unwrap();
         assert_eq!(span.link, None);

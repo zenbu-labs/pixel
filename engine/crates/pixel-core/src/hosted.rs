@@ -381,8 +381,7 @@ mod tests {
         let (control_tx, control_rx) = std::sync::mpsc::channel();
         let frame_dir = dir.to_string_lossy().into_owned();
         std::thread::spawn(move || {
-            let mut held = Vec::new();
-            for connection in listener.incoming() {
+            for connection in listener.incoming().take(3) {
                 let Ok(connection) = connection else { break };
                 let mut reader = BufReader::new(connection);
                 let mut opening = String::new();
@@ -420,10 +419,8 @@ mod tests {
                     let key = json!({ "type": "key", "key": "enter", "kind": "press", "mods": {} });
                     send(reader.get_mut(), &key).unwrap();
                     send(reader.get_mut(), &json!({ "type": "size", "cols": 20, "rows": 5, "width": 200, "height": 100 })).unwrap();
+                    control_tx.send(opening.clone()).unwrap();
                     let control_tx = control_tx.clone();
-                    let stream = reader.into_inner();
-                    let mut reader = BufReader::new(stream.try_clone().unwrap());
-                    held.push(stream);
                     std::thread::spawn(move || {
                         let mut line = String::new();
                         while reader.read_line(&mut line).map(|n| n > 0).unwrap_or(false) {
@@ -446,6 +443,11 @@ mod tests {
         let (socket, frames, control) = fake_owner(&dir);
 
         let mut term = Terminal::join_host(&socket, "pane-7", "hello").unwrap();
+        let joined: Value =
+            serde_json::from_str(&control.recv_timeout(Duration::from_secs(2)).unwrap()).unwrap();
+        assert_eq!(joined["type"], "join");
+        assert_eq!(joined["pane"], "pane-7");
+        assert_eq!(joined["name"], "hello");
         assert!(term.is_hosted());
         assert!(term.kitty_keyboard());
         assert_eq!(term.size().unwrap().cols, 40);
@@ -480,7 +482,9 @@ mod tests {
 
         let mut canvas = crate::canvas::Canvas::new(4, 2);
         canvas.pixels[..4].copy_from_slice(&[1, 2, 3, 255]);
-        term.draw(&canvas).unwrap();
+        let whole = [crate::surfaces::Rect::sized(canvas.width, canvas.height)];
+        term.draw(crate::canvas::Frame { canvas: &canvas, premultiplied: false, changed: &[], repainted: &whole, opaque: &[], ui_over_surfaces: &[] })
+            .unwrap();
         let header = frames.recv_timeout(Duration::from_secs(2)).unwrap();
         assert!(header.contains("\"format\":\"bgra\""), "{header}");
         let path = super::super::herdr::tests_support::frame_path(&header);
@@ -498,36 +502,6 @@ mod tests {
         );
         assert!(sent[1].contains("\"pointer\""), "{sent:?}");
         drop(term);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn join_reads_the_init_reply_and_hands_back_a_blocking_stream() {
-        let dir = std::env::temp_dir().join(format!("pixel-hosted-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let socket = dir.join("owner.sock");
-        let listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-        let owner = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut reader = BufReader::new(stream);
-            let mut join = String::new();
-            reader.read_line(&mut join).unwrap();
-            let init = json!({
-                "type": "init", "cols": 40, "rows": 10, "width": 400, "height": 200,
-                "colors": { "foreground": [255, 255, 255, 255] }, "focused": false
-            });
-            send(reader.get_mut(), &init).unwrap();
-            join
-        });
-        let Joined { state, .. } = join(&socket.to_string_lossy(), "pane-1", "hello").unwrap();
-        let joined: Value = serde_json::from_str(&owner.join().unwrap()).unwrap();
-        assert_eq!(joined["type"], "join");
-        assert_eq!(joined["pane"], "pane-1");
-        assert_eq!(joined["name"], "hello");
-        assert_eq!(state.size.cols, 40);
-        assert!(!state.focused);
-        assert_eq!(state.colors.foreground, Some([255, 255, 255, 255]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -2,6 +2,7 @@ mod clipboard;
 mod compositor;
 mod doc;
 mod embed;
+mod frame;
 mod hover;
 mod input;
 mod keys;
@@ -21,17 +22,14 @@ use pointer::DragTarget;
 
 pub use overlay::HighlightArea;
 
-use crate::canvas::Canvas;
 use crate::wrapper::Wrapper;
 use crate::logging;
 use crate::menu::MenuController;
 use crate::native::NativeScroll;
-use crate::paint::paint;
-use crate::profiler::{ProfileData, Profiler};
+use crate::profiler::ProfileData;
 use crate::scroll::ScrollProfile;
 use crate::scroll::profiles::Smooth;
 use crate::style::Color;
-use crate::surfaces::Rect;
 use crate::terminal::{
     Event, Handoff, KeyEvent, Mods, Mouse, MouseButton, MouseKind, Retarget, Terminal,
     TerminalColors,
@@ -40,11 +38,14 @@ use crate::text_input::InputReply;
 use crate::throttle::CpuThrottle;
 use crate::tree::{NodeId, PxRect};
 
-fn window_from(ws: &crate::terminal::WindowSize, cell: (u32, u32)) -> (u32, u32) {
+fn window_from(ws: &crate::terminal::WindowSize, cell: (u32, u32), cell_is_exact: bool) -> (u32, u32) {
     let cols = if ws.cols > 0 { ws.cols } else { 80 };
     let rows = if ws.rows > 0 { ws.rows } else { 24 };
     let mut width = cols * cell.0;
     let mut height = rows * cell.1;
+    if cell_is_exact {
+        return (width, height);
+    }
     if ws.width_px > 0 {
         width = width.min(ws.width_px / cell.0 * cell.0);
     }
@@ -55,6 +56,7 @@ fn window_from(ws: &crate::terminal::WindowSize, cell: (u32, u32)) -> (u32, u32)
 }
 
 const PAINT_INTERVAL_WITH_INPUT_PENDING: Duration = Duration::from_millis(16);
+const CELL_REPLY_WAIT: Duration = Duration::from_millis(150);
 
 static DEFAULT_PROFILE: Smooth = Smooth {
     tau: 0.08,
@@ -168,6 +170,7 @@ pub enum EngineEvent {
         view: usize,
         width: u32,
         height: u32,
+        cell: (u32, u32),
         base_px: f32,
     },
     Colors {
@@ -284,7 +287,6 @@ pub struct Engine {
     pub comp: Compositor,
     pub fonts: Vec<fontdue::Font>,
     cell_metrics_font: usize,
-    pub profiler: Profiler,
     pub cell: (u32, u32),
     cell_estimate: Option<(u32, u32)>,
     pub base_px: f32,
@@ -311,7 +313,8 @@ pub struct Engine {
     inspect_hover: Option<NodeId>,
     highlight: Option<(usize, NodeId, HighlightArea)>,
     hover_target: Option<(usize, NodeId)>,
-    pub emit_logs: bool,
+    emit_logs: bool,
+    pub compare_surfaces: bool,
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
     pending_click: Option<(usize, NodeId)>,
@@ -338,6 +341,8 @@ pub struct Engine {
     last_pointer_click: Option<Instant>,
     next_pasted_mark: u64,
     pending: Vec<EngineEvent>,
+    awaiting_cell: Option<(crate::terminal::WindowSize, Instant)>,
+    cell_exact: bool,
     color_request_at: Option<Instant>,
     last_color_request: Option<Instant>,
     last_step: Instant,
@@ -345,6 +350,8 @@ pub struct Engine {
     last_frame_bytes: usize,
     frame_deferred: bool,
     frame_budget_bytes_per_sec: f32,
+    max_fps: f32,
+    frame_due: Option<Instant>,
     pub stats: FrameStats,
 }
 
@@ -355,6 +362,8 @@ const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
 impl Engine {
     pub fn new(config: EngineConfig) -> io::Result<Self> {
         assert!(!config.fonts.is_empty());
+        let frame_budget = frame::DEFAULT_FRAME_BUDGET_MB_PER_SEC * 1_000_000.0;
+        let max_fps = frame::DEFAULT_MAX_FPS;
         let mut term = match (&config.host, &config.tty) {
             (Some(host), _) => match &host.tty {
                 Some(tty) => Terminal::join_embedded(&host.socket, &host.pane, &host.name, tty)?,
@@ -370,12 +379,9 @@ impl Engine {
         }
         let colors = term.query_colors()?;
         let ws = term.size()?;
-        let cell = term.cell_size()?.unwrap_or((16, 32));
-        let window = window_from(&ws, cell);
+        let cell = term.cell_size()?.unwrap_or(crate::terminal::DEFAULT_CELL);
+        let window = window_from(&ws, cell, false);
         let base_px = px_for_cell_height(&config.fonts[config.cell_metrics_font], cell.1 as f32);
-        // look into this
-        // Under a pixel owner the owner pairs trackpad deltas and
-        // forwards them; a foreign host only sends wheel ticks, so pair them here.
         let native = if term.is_hosted() && !term.is_embedded() {
             None
         } else {
@@ -405,7 +411,6 @@ impl Engine {
             comp: Compositor::new(window),
             fonts: config.fonts,
             cell_metrics_font: config.cell_metrics_font,
-            profiler: Profiler::new(),
             cell,
             cell_estimate: ws.cell_size(),
             base_px,
@@ -432,6 +437,7 @@ impl Engine {
             highlight: None,
             hover_target: None,
             emit_logs: false,
+            compare_surfaces: true,
             log_cursor: 0,
             drag: None,
             pending_click: None,
@@ -452,13 +458,17 @@ impl Engine {
             last_pointer_click: None,
             next_pasted_mark: 1 << 48,
             pending: Vec::new(),
+            awaiting_cell: None,
+            cell_exact: false,
             color_request_at: None,
             last_color_request: None,
             last_step: Instant::now(),
             last_frame: Instant::now(),
             last_frame_bytes: 0,
             frame_deferred: false,
-            frame_budget_bytes_per_sec: frame_budget_bytes_per_sec(),
+            frame_budget_bytes_per_sec: frame_budget,
+            max_fps,
+            frame_due: None,
             stats: FrameStats::default(),
         };
         Ok(engine)
@@ -542,6 +552,7 @@ impl Engine {
                 view,
                 width: size.0,
                 height: size.1,
+                cell: self.cell,
                 base_px: self.base_px,
             });
         }
@@ -555,13 +566,6 @@ impl Engine {
                 .is_some_and(|at| at.elapsed() < Duration::from_millis(1500))
     }
 
-    pub fn profiler_toggle(&mut self) -> io::Result<Option<std::path::PathBuf>> {
-        if crate::profiler::is_recording() {
-            crate::image_cache::emit_pending_waits();
-        }
-        self.profiler.toggle()
-    }
-
     pub fn profile_start(&mut self) {
         if !crate::profiler::is_recording() {
             logging::info("profiler", "recording started");
@@ -570,16 +574,20 @@ impl Engine {
     }
 
     pub fn profile_stop(&mut self) {
-        if crate::profiler::is_recording() {
-            crate::image_cache::emit_pending_waits();
-        }
-        if let Some(data) = crate::profiler::stop() {
-            logging::info(
-                "profiler",
-                format!("recording stopped, {} spans", data.spans.len()),
-            );
+        if let Some(data) = self.stop_recording() {
             self.pending.push(EngineEvent::Profile(data));
         }
+    }
+
+    pub fn profile_stop_to_file(&mut self) -> io::Result<Option<std::path::PathBuf>> {
+        self.stop_recording().map(|data| crate::profiler::write_report(&data)).transpose()
+    }
+
+    fn stop_recording(&mut self) -> Option<ProfileData> {
+        crate::image_cache::emit_pending_waits();
+        let data = crate::profiler::stop()?;
+        logging::info("profiler", format!("recording stopped, {} spans", data.spans.len()));
+        Some(data)
     }
 
     pub fn set_cpu_throttle(&mut self, rate: f32) {
@@ -590,9 +598,7 @@ impl Engine {
         self.cpu_throttle.set_rate(rate);
         let applied = self.cpu_throttle.rate();
         logging::info("engine", format!("cpu throttle {applied}x"));
-        if crate::profiler::is_recording() {
-            crate::profiler::mark("throttle", 0, format!("cpu throttle {applied}x"));
-        }
+        crate::profiler::mark("throttle", 0, || format!("cpu throttle {applied}x"));
     }
 
     pub fn flush_view_layout(&mut self, view: usize) {
@@ -633,7 +639,9 @@ impl Engine {
     ) -> io::Result<Option<crate::terminal::Event>> {
         self.frame()?;
         self.send_due_color_request()?;
-        let mut first_wait = if self.animating() || self.frame_deferred {
+        let mut first_wait = if self.frame_deferred && let Some(due) = self.frame_due {
+            Some(due.saturating_duration_since(Instant::now()).max(Duration::from_millis(1)))
+        } else if self.animating() || self.frame_deferred {
             Some(Duration::from_millis(6))
         } else if !out_empty {
             Some(Duration::ZERO)
@@ -644,6 +652,9 @@ impl Engine {
             self.clipboard.osc_deadline(),
             self.focus_click.as_ref().map(|(deadline, _)| *deadline),
             self.color_request_at,
+            self.awaiting_cell.as_ref().map(|(_, at)| *at),
+            self.term.idle_flatten_at(),
+            self.term.overlay_due(),
         ];
         for deadline in deadlines.into_iter().flatten() {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -699,6 +710,7 @@ impl Engine {
             }
         }
         self.check_resize(&mut out)?;
+        self.apply_overdue_window()?;
         self.drain_native(&mut out);
         let now = Instant::now();
         let dt = now.duration_since(self.last_step).as_secs_f32().min(0.05);
@@ -734,6 +746,15 @@ impl Engine {
             self.push_paste_image(view, node, image, &mut out);
             self.pending = out;
         }
+    }
+
+    pub fn set_log_capture(&mut self, on: bool) {
+        logging::keep_in_memory(on);
+        self.emit_logs = on;
+    }
+
+    pub fn set_log_file(&mut self, path: Option<std::path::PathBuf>) {
+        logging::write_to_file(path);
     }
 
     fn drain_logs(&mut self, out: &mut Vec<EngineEvent>) {
@@ -797,22 +818,55 @@ impl Engine {
         if ws.cols == 0 && ws.width_px == 0 {
             return Ok(());
         }
-        self.apply_window(&ws)?;
+        self.apply_window(&ws, "ioctl")?;
         out.append(&mut self.pending);
         Ok(())
     }
 
-    fn apply_window(&mut self, ws: &crate::terminal::WindowSize) -> io::Result<()> {
+    fn apply_window(&mut self, ws: &crate::terminal::WindowSize, source: &str) -> io::Result<()> {
         let estimate = ws.cell_size();
         if estimate != self.cell_estimate {
             self.cell_estimate = estimate;
-            self.term.forget_cell_size();
+            if let Some(cell) = self.term.ask_cell_size()? {
+                self.awaiting_cell = None;
+                self.cell_exact = true;
+                return self.resize_to(ws, cell, source);
+            }
+            self.awaiting_cell = Some((*ws, Instant::now() + CELL_REPLY_WAIT));
         }
-        let cell = self.term.cell_size()?.unwrap_or(self.cell);
-        let window = window_from(ws, cell);
+        match &mut self.awaiting_cell {
+            Some((pending, _)) => {
+                *pending = *ws;
+                Ok(())
+            }
+            None => self.resize_to(ws, self.cell, source),
+        }
+    }
+
+    fn apply_overdue_window(&mut self) -> io::Result<()> {
+        let Some((ws, at)) = self.awaiting_cell else {
+            return Ok(());
+        };
+        if Instant::now() < at {
+            return Ok(());
+        }
+        self.awaiting_cell = None;
+        let cell = ws.cell_size().unwrap_or(self.cell);
+        self.cell_exact = false;
+        self.resize_to(&ws, cell, "unanswered cell query")
+    }
+
+    fn resize_to(&mut self, ws: &crate::terminal::WindowSize, cell: (u32, u32), source: &str) -> io::Result<()> {
+        self.term.set_cell_size(cell);
+        let window = window_from(ws, cell, self.cell_exact);
         if window == self.comp.window && cell == self.cell {
             return Ok(());
         }
+        let estimate = ws.cell_size();
+        logging::info(
+            "engine",
+            format!("window size from {source}: {}x{} cells, {}x{} px, estimated cell {:?}", ws.cols, ws.rows, ws.width_px, ws.height_px, estimate),
+        );
         let base_px = px_for_cell_height(
             &self.fonts[self.cell_metrics_font.min(self.fonts.len() - 1)],
             cell.1 as f32,
@@ -832,16 +886,9 @@ impl Engine {
                 cell.1,
             ),
         );
-        if crate::profiler::is_recording() {
-            crate::profiler::mark(
-                "resize",
-                0,
-                format!(
-                    "resize {}x{} cell {}x{}",
-                    window.0, window.1, cell.0, cell.1
-                ),
-            );
-        }
+        crate::profiler::mark("resize", 0, || {
+            format!("resize {}x{} cell {}x{}", window.0, window.1, cell.0, cell.1)
+        });
         let base_changed = (base_px - self.base_px).abs() > 0.01;
         self.hover_oracle.invalidate();
         self.comp.window = window;
@@ -865,9 +912,8 @@ impl Engine {
         let mut out = Vec::new();
         self.apply_colors(colors, &mut out);
         self.cell_estimate = None;
-        self.term.forget_cell_size();
         let ws = self.term.size()?;
-        self.apply_window(&ws)?;
+        self.apply_window(&ws, "retarget")?;
         self.comp.dirty = true;
         self.pending.append(&mut out);
         Ok(())
@@ -893,13 +939,9 @@ impl Engine {
             }),
             Event::Key(key) => self.handle_key(key, out)?,
             Event::Paste(text) => {
-                if crate::profiler::is_recording() {
-                    crate::profiler::mark(
-                        "paste",
-                        self.active_view as u32,
-                        format!("paste ({} chars)", text.chars().count()),
-                    );
-                }
+                crate::profiler::mark("paste", self.active_view as u32, || {
+                    format!("paste ({} chars)", text.chars().count())
+                });
                 if let Some((view, focus)) = self.focused() {
                     if let Some(image) = crate::clipboard_image::image_path_from_paste(&text) {
                         self.push_paste_image(view, focus, image, out);
@@ -959,10 +1001,18 @@ impl Engine {
                 out.push(EngineEvent::Focus { focused });
             }
             Event::WindowSize(ws) => {
-                self.apply_window(&ws)?;
+                self.apply_window(&ws, "in-band report")?;
                 if self.term.is_embedded() {
                     self.comp.dirty = true;
                 }
+            }
+            Event::CellSize(cell) => {
+                let ws = match self.awaiting_cell.take() {
+                    Some((ws, _)) => ws,
+                    None => self.term.size()?,
+                };
+                self.cell_exact = true;
+                self.resize_to(&ws, cell, "cell size report")?;
             }
             Event::Mouse(mouse) => self.handle_mouse(mouse, out)?,
             Event::ClipboardData { items, ok } => {
@@ -1012,146 +1062,8 @@ impl Engine {
         self.clipboard.attach_rich(&mut self.term, token, marks);
     }
 
-    fn frame_debt(&self) -> Duration {
-        if !self.term.frames_are_inline() {
-            return Duration::ZERO;
-        }
-        let budget = self.frame_budget_bytes_per_sec;
-        if budget <= 0.0 {
-            return Duration::ZERO;
-        }
-        Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2))
-    }
-
-    fn draws_something(&self) -> bool {
-        self.comp.dirty
-            || self.comp.active_views().iter().any(|&i| {
-                let view = &self.comp.views[i];
-                view.tree.dirty()
-                    || !view.damage.is_empty()
-                    || (view.canvas.width, view.canvas.height) != view.size
-            })
-    }
-
-    fn frame(&mut self) -> io::Result<()> {
-        let debt = self.frame_debt();
-        if !debt.is_zero() && Instant::now().duration_since(self.last_frame) < debt {
-            self.frame_deferred = self.draws_something();
-            if self.frame_deferred {
-                return Ok(());
-            }
-        } else {
-            self.frame_deferred = false;
-        }
-        let active = self.comp.active_views();
-        let work: Vec<(usize, Option<Rect>)> = active
-            .iter()
-            .filter_map(|&i| {
-                let view = &self.comp.views[i];
-                if view.tree.dirty() || (view.canvas.width, view.canvas.height) != view.size {
-                    Some((i, None))
-                } else if view.damage.is_empty() {
-                    None
-                } else {
-                    Some((i, Some(view.damage)))
-                }
-            })
-            .collect();
-        if work.is_empty() && !self.comp.dirty {
-            return Ok(());
-        }
-        crate::profiler::span("frame", || -> io::Result<()> {
-            let start = Instant::now();
-            let mut painted: Vec<(usize, Rect)> = Vec::new();
-            for (i, damage) in work {
-                let size = self.comp.views[i].size;
-                if size.0 == 0 || size.1 == 0 {
-                    continue;
-                }
-                crate::profiler::set_view(i as u32);
-                let cursor = self
-                    .cursor
-                    .filter(|&(x, _)| self.comp.view_at(x) == i)
-                    .map(|c| self.comp.to_local(i, c));
-                let fonts = &self.fonts;
-                let base_px = self.base_px;
-                let view = &mut self.comp.views[i];
-                let region = damage.unwrap_or(Rect::sized(size.0, size.1));
-                if (view.canvas.width, view.canvas.height) != size {
-                    view.canvas = Canvas::new(size.0, size.1);
-                }
-                view.canvas.push_clip(
-                    region.x as f32,
-                    region.y as f32,
-                    region.w as f32,
-                    region.h as f32,
-                );
-                view.tree.flush_layout(fonts, base_px);
-                paint(
-                    &view.tree,
-                    &mut view.canvas,
-                    fonts,
-                    cursor,
-                    Some((region, view.clear_color)),
-                );
-                view.canvas.pop_clip();
-                view.tree.clear_paint_flag();
-                view.damage = Rect::default();
-                painted.push((i, region));
-                self.comp.dirty = true;
-            }
-            crate::profiler::set_view(0);
-            if !self.comp.dirty {
-                return Ok(());
-            }
-            self.compose(&painted);
-            let bytes = crate::profiler::span("draw", || self.term.draw(&self.comp.frame))?;
-            crate::profiler::count("bytes", bytes as u64);
-            self.last_frame_bytes = bytes;
-
-            let gap = start.duration_since(self.last_frame).as_secs_f32();
-            self.last_frame = start;
-            let ema = |old: f32, new: f32| {
-                if old == 0.0 {
-                    new
-                } else {
-                    old * 0.9 + new * 0.1
-                }
-            };
-            self.stats.frame_ms = ema(self.stats.frame_ms, start.elapsed().as_secs_f32() * 1000.0);
-            if gap < 0.25 {
-                self.stats.fps = ema(self.stats.fps, 1.0 / gap);
-            }
-            Ok(())
-        })
-    }
-
-    fn compose(&mut self, painted: &[(usize, Rect)]) {
-        let overlays = self.highlight.is_some() || self.inspect_mode;
-        crate::profiler::span("compose", || {
-            self.comp.compose(painted, overlays);
-            if let Some((view, id, area)) = self.highlight {
-                self.draw_node_overlay(view, id, area, false);
-            }
-            if self.inspect_mode
-                && let Some(id) = self.inspect_hover
-            {
-                self.draw_node_overlay(self.inspect_view, id, HighlightArea::All, true);
-            }
-        });
-        self.comp.dirty = false;
-    }
 }
 
-const DEFAULT_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
-
-fn frame_budget_bytes_per_sec() -> f32 {
-    let configured = std::env::var("TERMINAL_BROWSER_FRAME_BUDGET_MBPS")
-        .ok()
-        .and_then(|value| value.parse::<f32>().ok())
-        .filter(|value| *value >= 0.0);
-    configured.unwrap_or(DEFAULT_FRAME_BUDGET_MB_PER_SEC) * 1_000_000.0
-}
 
 pub fn px_for_cell_height(font: &fontdue::Font, cell_height: f32) -> f32 {
     let probe = font
@@ -1166,17 +1078,6 @@ mod tests {
     use crate::terminal::WindowSize;
 
     #[test]
-    fn window_clips_padding_remainder_to_grid() {
-        let ws = WindowSize {
-            cols: 100,
-            rows: 40,
-            width_px: 1007,
-            height_px: 845,
-        };
-        assert_eq!(window_from(&ws, (10, 20)), (1000, 800));
-    }
-
-    #[test]
     fn window_uses_grid_when_pixels_missing() {
         let ws = WindowSize {
             cols: 80,
@@ -1184,17 +1085,35 @@ mod tests {
             width_px: 0,
             height_px: 0,
         };
-        assert_eq!(window_from(&ws, (16, 32)), (80 * 16, 24 * 32));
+        assert_eq!(window_from(&ws, (16, 32), false), (80 * 16, 24 * 32));
     }
 
     #[test]
-    fn window_clamps_when_cell_overestimated() {
+    fn window_is_whole_cells_within_the_reported_pixels() {
+        let ws = WindowSize {
+            cols: 100,
+            rows: 40,
+            width_px: 1007,
+            height_px: 845,
+        };
+        assert_eq!(window_from(&ws, (10, 20), false), (1000, 800));
         let ws = WindowSize {
             cols: 100,
             rows: 40,
             width_px: 1050,
             height_px: 800,
         };
-        assert_eq!(window_from(&ws, (11, 21)), (1045, 798));
+        assert_eq!(window_from(&ws, (11, 21), false), (1045, 798));
+    }
+
+    #[test]
+    fn a_cell_the_terminal_reported_outranks_relay_pixels() {
+        let ws = WindowSize {
+            cols: 94,
+            rows: 51,
+            width_px: 1504,
+            height_px: 1734,
+        };
+        assert_eq!(window_from(&ws, (19, 42), true), (94 * 19, 51 * 42));
     }
 }
