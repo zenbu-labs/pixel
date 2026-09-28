@@ -120,6 +120,13 @@ enum Op {
     QueryLayout {},
     ProfileStart {},
     ProfileStop {},
+    SetLogCapture {
+        on: bool,
+    },
+    SetLogFile {
+        #[serde(default)]
+        path: Option<String>,
+    },
     SetCpuThrottle {
         rate: f32,
     },
@@ -860,6 +867,8 @@ fn apply_op(
         }
         Op::ProfileStart {} => engine.profile_start(),
         Op::ProfileStop {} => engine.profile_stop(),
+        Op::SetLogCapture { on } => engine.set_log_capture(on),
+        Op::SetLogFile { path } => engine.set_log_file(path.map(std::path::PathBuf::from)),
         Op::SetCpuThrottle { rate } => engine.set_cpu_throttle(rate),
         Op::SetRender { max_fps, frame_budget_mbps, highlight_transmits, compare_frames, frame_events } => {
             if let Some(fps) = max_fps {

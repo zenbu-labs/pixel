@@ -313,7 +313,7 @@ pub struct Engine {
     inspect_hover: Option<NodeId>,
     highlight: Option<(usize, NodeId, HighlightArea)>,
     hover_target: Option<(usize, NodeId)>,
-    pub emit_logs: bool,
+    emit_logs: bool,
     /// Whether browser frames are compared against the previous one to find what changed,
     /// or the browser's dirty rect is taken as is.
     pub compare_surfaces: bool,
@@ -751,6 +751,15 @@ impl Engine {
             self.push_paste_image(view, node, image, &mut out);
             self.pending = out;
         }
+    }
+
+    pub fn set_log_capture(&mut self, on: bool) {
+        logging::keep_in_memory(on);
+        self.emit_logs = on;
+    }
+
+    pub fn set_log_file(&mut self, path: Option<std::path::PathBuf>) {
+        logging::write_to_file(path);
     }
 
     fn drain_logs(&mut self, out: &mut Vec<EngineEvent>) {

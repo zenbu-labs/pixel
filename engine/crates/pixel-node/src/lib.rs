@@ -522,7 +522,6 @@ impl PixelEngine {
             let cell = cell;
             let mut engine = cell.0;
             engine.set_default_menu(true);
-            engine.emit_logs = true;
             let mut ids: Vec<IdMap> = (0..engine.comp.views.len())
                 .map(|view| IdMap::new(engine.comp.views[view].tree.root()))
                 .collect();

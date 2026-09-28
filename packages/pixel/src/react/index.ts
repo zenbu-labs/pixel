@@ -216,12 +216,10 @@ export interface PixelRoot {
   stop(): void;
   openDevtools(tab?: DevtoolsTab): void;
   closeDevtools(): void;
-  /** Starts an engine + React profile without opening the devtools pane. */
   startProfile(): void;
-  /** Stops the profile and resolves to the exported JSON path (null if nothing was recorded). */
   stopProfile(): Promise<string | null>;
-  /** Changes how frames reach the terminal; fields left out keep their value. */
   setRender(settings: RenderSettings): void;
+  setLogFile(path: string | null): void;
   highlightTransmits(): boolean;
   // nudge resize is a ridiculous api
   nudgeResize(): void;
@@ -781,6 +779,10 @@ export function createRoot(options: RootOptions = {}): PixelRoot {
         highlightTransmits: settings.highlightTransmits ?? s.highlightTransmits,
       }));
       bridge.push(APP_VIEW, { op: "setRender", ...settings });
+      bridge.flush();
+    },
+    setLogFile(path: string | null) {
+      bridge.push(APP_VIEW, { op: "setLogFile", path });
       bridge.flush();
     },
     highlightTransmits() {
