@@ -8,7 +8,7 @@ use crate::logging;
 use crate::paint::paint;
 use crate::surfaces::Rect;
 
-pub(super) const DEFAULT_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
+const INLINE_FRAME_BUDGET_MB_PER_SEC: f32 = 3.0;
 pub(super) const DEFAULT_MAX_FPS: f32 = 0.0;
 
 impl Engine {
@@ -30,19 +30,6 @@ impl Engine {
         self.term.note(text);
     }
 
-    pub fn set_compare_surfaces(&mut self, on: bool) {
-        self.compare_surfaces = on;
-        logging::info(
-            "engine",
-            if on { "browser frames are compared to find what changed" } else { "browser dirty rects are trusted as reported" },
-        );
-    }
-
-    pub fn set_frame_budget_mbps(&mut self, mbps: f32) {
-        self.frame_budget_bytes_per_sec = mbps.max(0.0) * 1_000_000.0;
-        logging::info("engine", format!("inline frame budget {mbps} MB/s"));
-    }
-
     pub(super) fn frame_debt(&self) -> Duration {
         let interval = if self.max_fps > 0.0 {
             Duration::from_secs_f32(1.0 / self.max_fps)
@@ -52,10 +39,7 @@ impl Engine {
         if !self.term.frames_are_inline() {
             return interval;
         }
-        let budget = self.frame_budget_bytes_per_sec;
-        if budget <= 0.0 {
-            return interval;
-        }
+        let budget = INLINE_FRAME_BUDGET_MB_PER_SEC * 1_000_000.0;
         interval.max(Duration::from_secs_f32((self.last_frame_bytes as f32 / budget).min(0.2)))
     }
 

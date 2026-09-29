@@ -314,7 +314,6 @@ pub struct Engine {
     highlight: Option<(usize, NodeId, HighlightArea)>,
     hover_target: Option<(usize, NodeId)>,
     emit_logs: bool,
-    pub compare_surfaces: bool,
     log_cursor: u64,
     drag: Option<(usize, DragTarget)>,
     pending_click: Option<(usize, NodeId)>,
@@ -349,7 +348,6 @@ pub struct Engine {
     last_frame: Instant,
     last_frame_bytes: usize,
     frame_deferred: bool,
-    frame_budget_bytes_per_sec: f32,
     max_fps: f32,
     frame_due: Option<Instant>,
     pub stats: FrameStats,
@@ -362,7 +360,6 @@ const RELAYED_RESIZE_POLL: Duration = Duration::from_millis(500);
 impl Engine {
     pub fn new(config: EngineConfig) -> io::Result<Self> {
         assert!(!config.fonts.is_empty());
-        let frame_budget = frame::DEFAULT_FRAME_BUDGET_MB_PER_SEC * 1_000_000.0;
         let max_fps = frame::DEFAULT_MAX_FPS;
         let mut term = match (&config.host, &config.tty) {
             (Some(host), _) => match &host.tty {
@@ -437,7 +434,6 @@ impl Engine {
             highlight: None,
             hover_target: None,
             emit_logs: false,
-            compare_surfaces: true,
             log_cursor: 0,
             drag: None,
             pending_click: None,
@@ -466,7 +462,6 @@ impl Engine {
             last_frame: Instant::now(),
             last_frame_bytes: 0,
             frame_deferred: false,
-            frame_budget_bytes_per_sec: frame_budget,
             max_fps,
             frame_due: None,
             stats: FrameStats::default(),

@@ -1,11 +1,20 @@
-import { useEffect, useLayoutEffect, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useState } from "react";
 import type { RefObject } from "react";
 
 import { debug } from "./debug";
 import type { LayoutSnapshot } from "./react";
 import type { NodeHandle } from "./react";
+import { RootContext } from "./registry";
 import type { ViewRegistry } from "./registry";
 import type { Rect } from "./devtools-layout";
+
+export function useRect(node: RefObject<NodeHandle | null>): Rect | null {
+  const registry = useContext(RootContext);
+  if (!registry) {
+    throw new Error("useRect has to be used under a root from createRoot()");
+  }
+  return useNodeRect(node, registry);
+}
 
 
 export function useNodeRect(node: RefObject<NodeHandle | null>, registry: ViewRegistry): Rect | null {

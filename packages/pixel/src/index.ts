@@ -15,6 +15,8 @@ export type {
   WebViewState,
 } from "./webview";
 export { DevTools } from "./devtools";
+export { useRect } from "./layout";
+export type { Rect } from "./devtools-layout";
 export type { DevToolsProps } from "./devtools";
 export type { DevtoolsDock } from "./web/types";
 export type { ZoomDirection } from "./web/zoom";

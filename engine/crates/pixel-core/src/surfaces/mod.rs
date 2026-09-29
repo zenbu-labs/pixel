@@ -131,7 +131,6 @@ pub fn write(
     damage: Option<&[Rect]>,
     bgra: &[u8],
     stride: usize,
-    compare: bool,
 ) -> Vec<Rect> {
     SURFACES.with_borrow_mut(|surfaces| {
         let surface = surfaces.entry(id).or_insert(Surface {
@@ -160,12 +159,7 @@ pub fn write(
             if region.is_empty() {
                 continue;
             }
-            if compare {
-                changed.extend(convert::region_tight(&mut surface.pixels, width, bgra, stride, region));
-            } else {
-                convert::region(&mut surface.pixels, width, bgra, stride, region);
-                changed.push(region);
-            }
+            changed.extend(convert::region_tight(&mut surface.pixels, width, bgra, stride, region));
         }
         if changed.is_empty() {
             crate::profiler::count("surface.unchanged", || 1);
@@ -211,20 +205,20 @@ mod tests {
     fn a_first_frame_or_a_resize_writes_the_whole_surface_whatever_the_damage() {
         let source = bgra(&[[1, 2, 3, 4]]);
         let damage = Rect { x: 0, y: 0, w: 1, h: 1 };
-        assert_eq!(write(1, 1, 1, Some(&[damage]), &source, 4, true), vec![Rect::sized(1, 1)]);
+        assert_eq!(write(1, 1, 1, Some(&[damage]), &source, 4), vec![Rect::sized(1, 1)]);
         with(1, |s| assert_eq!(s.pixels, source)).unwrap();
         let grown = bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]);
-        assert_eq!(write(1, 2, 1, Some(&[damage]), &grown, 8, true), vec![Rect::sized(2, 1)]);
+        assert_eq!(write(1, 2, 1, Some(&[damage]), &grown, 8), vec![Rect::sized(2, 1)]);
         with(1, |s| assert_eq!(s.pixels, grown)).unwrap();
         remove(1);
     }
 
     #[test]
     fn later_frames_only_touch_the_damaged_pixels() {
-        write(2, 2, 1, None, &bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]), 8, true);
+        write(2, 2, 1, None, &bgra(&[[1, 2, 3, 4], [5, 6, 7, 8]]), 8);
         let second = bgra(&[[9, 9, 9, 9], [10, 20, 30, 40]]);
         let damage = Rect { x: 1, y: 0, w: 1, h: 1 };
-        assert_eq!(write(2, 2, 1, Some(&[damage]), &second, 8, true), vec![damage]);
+        assert_eq!(write(2, 2, 1, Some(&[damage]), &second, 8), vec![damage]);
         with(2, |s| assert_eq!(s.pixels, [1, 2, 3, 4, 10, 20, 30, 40])).unwrap();
         remove(2);
     }
@@ -232,10 +226,10 @@ mod tests {
     #[test]
     fn an_identical_frame_reports_nothing_changed_with_or_without_damage() {
         let source = bgra(&[[1, 2, 3, 255], [5, 6, 7, 255]]);
-        write(4, 2, 1, None, &source, 8, true);
-        assert!(write(4, 2, 1, None, &source, 8, true).is_empty());
+        write(4, 2, 1, None, &source, 8);
+        assert!(write(4, 2, 1, None, &source, 8).is_empty());
         let damage = Rect { x: 0, y: 0, w: 2, h: 1 };
-        assert!(write(4, 2, 1, Some(&[damage]), &source, 8, true).is_empty());
+        assert!(write(4, 2, 1, Some(&[damage]), &source, 8).is_empty());
         remove(4);
     }
 
@@ -246,13 +240,13 @@ mod tests {
         for px in first.chunks_exact_mut(4) {
             px.copy_from_slice(&[9, 9, 9, 255]);
         }
-        write(6, w, h, None, &first, w as usize * 4, true);
+        write(6, w, h, None, &first, w as usize * 4);
         let mut second = first.clone();
         let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
         second[at(1, 2)..at(1, 2) + 4].copy_from_slice(&[1, 1, 1, 255]);
         second[at(3, 30)..at(3, 30) + 4].copy_from_slice(&[2, 2, 2, 255]);
         second[at(2, 31)..at(2, 31) + 4].copy_from_slice(&[3, 3, 3, 255]);
-        let parts = write(6, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4, true);
+        let parts = write(6, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4);
         // Far apart down a surface this narrow, one rect covering all three costs 85 blank
         // pixels, far less than a second image is worth.
         assert_eq!(parts, vec![Rect { x: 1, y: 2, w: 3, h: 30 }]);
@@ -266,12 +260,12 @@ mod tests {
         for px in first.chunks_exact_mut(4) {
             px.copy_from_slice(&[9, 9, 9, 255]);
         }
-        write(7, w, h, None, &first, w as usize * 4, true);
+        write(7, w, h, None, &first, w as usize * 4);
         let mut second = first.clone();
         let at = |x: u32, y: u32| ((y * w + x) * 4) as usize;
         second[at(10, 2)..at(10, 2) + 4].copy_from_slice(&[1, 1, 1, 255]);
         second[at(1900, 50)..at(1900, 50) + 4].copy_from_slice(&[2, 2, 2, 255]);
-        let parts = write(7, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4, true);
+        let parts = write(7, w, h, Some(&[Rect::sized(w, h)]), &second, w as usize * 4);
         // Joining these would blank out most of a 1891 by 49 rect, so they travel apart.
         assert_eq!(
             parts,

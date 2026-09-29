@@ -192,9 +192,7 @@ export interface RootOptions {
 
 export interface RenderSettings {
   maxFps?: number;
-  frameBudgetMbps?: number;
   highlightTransmits?: boolean;
-  compareFrames?: boolean;
   frameEvents?: boolean;
 }
 

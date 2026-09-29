@@ -224,7 +224,7 @@ mod tests {
 
     fn declare_surface(id: u32, w: u32, h: u32) {
         let pixels = vec![0u8; (w * h * 4) as usize];
-        crate::surfaces::write(id, w, h, None, &pixels, (w * 4) as usize, true);
+        crate::surfaces::write(id, w, h, None, &pixels, (w * 4) as usize);
     }
 
     static FONT_BYTES: &[u8] = include_bytes!("../../../../assets/fonts/JetBrainsMono-Regular.ttf");
