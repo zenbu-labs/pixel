@@ -22,6 +22,7 @@ pub(crate) use overlay::Overlay;
 pub(crate) use patched::Patched;
 
 const IDENTITY_PROBE_TIMEOUT_MS: u64 = 150;
+
 const FRAME_EDIT_PROBE_ID: u32 = 302;
 const FRAME_EDIT_PROBE_TIMEOUT_MS: u64 = 1200;
 
@@ -43,7 +44,7 @@ pub(crate) enum Identity {
 
 impl Identity {
     // not sure if i want this
-    fn edits_frames_cheaply(self) -> bool {
+    fn animates_frames(self) -> bool {
         !matches!(self, Identity::Kitty { .. })
     }
 
@@ -74,23 +75,19 @@ pub(super) fn select(
 ) -> Presenter {
     if relayed {
         return match forced.map(str::trim) {
-            Some("full") => Presenter::Full,
-            Some("animation") => Presenter::Animation,
-            _ if frame_edits => Presenter::Animation,
+            Some("animation") if frame_edits => Presenter::Animation,
             _ => Presenter::Full,
         };
     }
     let x = match forced.map(str::trim) {
         Some("full") => Presenter::Full,
-        Some("animation") => Presenter::Animation,
+        Some("animation") if frame_edits && identity.animates_frames() => Presenter::Animation,
         Some("patched") => Presenter::Patched,
-        _ if ssh && frame_edits && identity.edits_frames_cheaply() => Presenter::Animation,
         _ if ssh && identity.takes_patches() => Presenter::Patched,
         _ if transport == FrameTransport::Inline => Presenter::Full,
         _ if identity.takes_patches() => Presenter::Patched,
         _ => Presenter::Full,
     };
-
 
     return x;
 }
@@ -211,21 +208,15 @@ impl Terminal {
     pub(super) fn choose_present(&mut self, env: &SessionEnv) -> io::Result<Presenter> {
         let forced = env.var("TERMINAL_BROWSER_PRESENT");
         let ssh = over_ssh(env);
-        let frame_edits = (ssh || self.wrapper.relayed()) && self.probe_frame_edits()?;
-        let chosen = select(
-            forced.as_deref(),
-            self.wrapper.relayed(),
-            self.transport,
-            self.identity,
-            frame_edits,
-            ssh,
-        );
+        let wants_animation = forced.as_deref().map(str::trim) == Some("animation");
+        let frame_edits = wants_animation && self.probe_frame_edits()?;
+        if wants_animation && !frame_edits {
+            crate::logging::warn("terminal", "animation was asked for but this terminal does not edit frames, choosing normally");
+        }
+        let chosen = select(forced.as_deref(), self.wrapper.relayed(), self.transport, self.identity, frame_edits, ssh);
         crate::logging::info(
             "terminal",
-            format!(
-                "presenting frames as {chosen:?} (terminal {:?}, frame edits {frame_edits}, ssh {ssh}, forced {:?})",
-                self.identity, forced
-            ),
+            format!("presenting frames as {chosen:?} (terminal {:?}, frame edits {frame_edits}, ssh {ssh}, forced {:?})", self.identity, forced),
         );
         Ok(chosen)
     }
@@ -320,7 +311,7 @@ mod tests {
         let ghostty = Identity::Ghostty { version: (1, 3, 1) };
         let old_ghostty = Identity::Ghostty { version: (1, 1, 3) };
         let kitty = Identity::Kitty { version: (0, 46, 0) };
-        let local = |forced, transport, identity| select(forced, false, transport, identity, false, false);
+        let local = |forced, transport, identity| select(forced, false, transport, identity, true, false);
         assert_eq!(local(None, FrameTransport::File, ghostty), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::Shared, kitty), Presenter::Patched);
         assert_eq!(local(None, FrameTransport::File, old_ghostty), Presenter::Full);
@@ -329,21 +320,27 @@ mod tests {
         assert_eq!(local(Some("full"), FrameTransport::File, ghostty), Presenter::Full);
         assert_eq!(local(Some(" patched "), FrameTransport::File, Identity::Unknown), Presenter::Patched);
         assert_eq!(local(Some("patched"), FrameTransport::Inline, ghostty), Presenter::Patched);
-        assert_eq!(local(Some("animation"), FrameTransport::Inline, kitty), Presenter::Animation);
+        assert_eq!(local(Some("animation"), FrameTransport::Inline, kitty), Presenter::Full, "kitty never animates, even when asked");
+        assert_eq!(local(Some("animation"), FrameTransport::Shared, kitty), Presenter::Patched, "kitty never animates, even when asked");
+        assert_eq!(local(Some("animation"), FrameTransport::Inline, ghostty), Presenter::Animation);
+        assert_eq!(
+            select(Some("animation"), false, FrameTransport::Inline, ghostty, false, false),
+            Presenter::Full,
+            "asking for animation on a terminal that failed the probe falls back"
+        );
 
         let relayed = |forced, frame_edits| select(forced, true, FrameTransport::File, Identity::Unknown, frame_edits, false);
-        assert_eq!(relayed(None, true), Presenter::Animation, "through tmux one image is edited in place");
-        assert_eq!(relayed(None, false), Presenter::Full, "a terminal without frame edits gets whole frames");
-        assert_eq!(relayed(Some("patched"), true), Presenter::Animation, "patches cannot stack in placeholder cells");
+        assert_eq!(relayed(None, true), Presenter::Full, "through tmux whole frames unless animation is asked for");
+        assert_eq!(relayed(Some("animation"), true), Presenter::Animation);
+        assert_eq!(relayed(Some("animation"), false), Presenter::Full, "asked for but the probe failed");
+        assert_eq!(relayed(Some("patched"), true), Presenter::Full, "patches cannot stack in placeholder cells");
         assert_eq!(relayed(Some("full"), true), Presenter::Full);
 
-        let ssh = |identity, frame_edits| select(None, false, FrameTransport::Inline, identity, frame_edits, true);
-        assert_eq!(ssh(ghostty, true), Presenter::Animation);
-        assert_eq!(ssh(ghostty, false), Presenter::Patched);
-        assert_eq!(ssh(old_ghostty, false), Presenter::Full);
-        assert_eq!(ssh(kitty, true), Presenter::Patched, "kitty edits frames expensively");
-        assert_eq!(ssh(Identity::Unknown, true), Presenter::Animation);
-        assert_eq!(ssh(Identity::Unknown, false), Presenter::Full);
+        let ssh = |identity| select(None, false, FrameTransport::Inline, identity, true, true);
+        assert_eq!(ssh(ghostty), Presenter::Patched);
+        assert_eq!(ssh(old_ghostty), Presenter::Full);
+        assert_eq!(ssh(kitty), Presenter::Patched);
+        assert_eq!(ssh(Identity::Unknown), Presenter::Full);
     }
 
     #[test]

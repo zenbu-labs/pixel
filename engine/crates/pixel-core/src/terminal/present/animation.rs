@@ -37,7 +37,7 @@ impl Terminal {
     pub(in crate::terminal) fn draw_animation(&mut self, frame: Frame<'_>, out: &mut Vec<u8>) -> io::Result<usize> {
         let canvas = frame.canvas;
         let size = (canvas.width, canvas.height);
-        let single_edit = matches!(self.identity, super::Identity::Kitty { .. }) || self.wrapper.relayed(); // tmux case 
+        let single_edit = self.wrapper.relayed(); // tmux case 
         let damage: Vec<Rect> = frame.changed.iter().chain(frame.repainted).copied().collect();
         let strategy = choose_transmit_strategy(&self.animation, size, &damage, single_edit);
         self.animation.stats.record(&strategy, size, !frame.repainted.is_empty(), !frame.changed.is_empty());
