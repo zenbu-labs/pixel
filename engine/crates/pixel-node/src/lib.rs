@@ -1,7 +1,6 @@
 mod capture;
 mod diff;
 mod events;
-#[cfg(target_os = "macos")]
 mod highlight;
 #[cfg(target_os = "macos")]
 mod iosurface;
