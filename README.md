@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+>
+> **Pixel has moved to the [terminal-browser](https://github.com/zenbu-labs/terminal-browser/tree/main/pixel) repo.**
+
+
 # Pixel
 A library for building graphical applications that can run in the terminal
 
