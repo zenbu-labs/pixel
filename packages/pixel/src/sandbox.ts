@@ -27,9 +27,14 @@ export function deniedRefusal(): string | null {
 
 const APPARMOR_SCRIPT = path.resolve(__dirname, "..", "scripts", "apparmor.sh");
 
-function kernelSetting(file: string): string | null {
-  if (!fs.existsSync(file)) return null;
-  return fs.readFileSync(file, "utf8").trim();
+export function kernelSetting(file: string): string | null {
+  // An existence check won't tell us if the sysctl is readable by the
+  // current user, so try reading it directly and treat failures as unknown.
+  try {
+    return fs.readFileSync(file, "utf8").trim();
+  } catch {
+    return null;
+  }
 }
 
 function setuidSandbox(electronBinary: string): boolean {
